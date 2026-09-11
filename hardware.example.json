@@ -1,0 +1,21 @@
+{
+  "movement_seconds": 0.45,
+  "release_after_move": true,
+  "lids": {
+    "plastic": {
+      "channel": 0,
+      "closed_pulse_us": 1000,
+      "open_pulse_us": 1833
+    },
+    "general": {
+      "channel": 1,
+      "closed_pulse_us": 1000,
+      "open_pulse_us": 1833
+    },
+    "metal": {
+      "channel": 2,
+      "closed_pulse_us": 1000,
+      "open_pulse_us": 1833
+    }
+  }
+}
