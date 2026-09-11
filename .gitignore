@@ -1,3 +1,11 @@
-/Garbage classification/
-/garbage_classification/
-/original/
+.venv/
+.cache/
+__pycache__/
+*.py[cod]
+dataset/
+dataset_enhanced/
+external/
+data/*/*.jpg
+artifacts*/
+corrections/
+validation_data/
