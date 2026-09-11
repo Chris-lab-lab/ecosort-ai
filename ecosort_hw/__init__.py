@@ -14,9 +14,11 @@ from .lids import (
     load_lid_config,
 )
 from .pca9685 import LinuxI2CBus, PCA9685, PCA9685Config, RegisterBus
+from .sensors import DigitalMetalSensor
 
 __all__ = [
     "DEFAULT_LIDS",
+    "DigitalMetalSensor",
     "LidController",
     "LidControllerConfig",
     "LidName",

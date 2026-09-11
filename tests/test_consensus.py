@@ -128,6 +128,47 @@ class ConsensusTests(unittest.TestCase):
         self.assertEqual(result.agreement, 1.0)
         self.assertEqual(result.decision.route, "plastic")
 
+    def test_open_set_signals_are_averaged_and_can_reject(self) -> None:
+        predictions = iter(
+            SimpleNamespace(
+                scores={"plastic": .91, "general": .05, "metal": .04},
+                supported_probability=supported,
+                prototype_distances={"plastic": .12, "general": .20, "metal": .18},
+                prototype_thresholds={"plastic": .20, "general": .25, "metal": .22},
+            )
+            for supported in (.30, .40, .50)
+        )
+        classifier = SimpleNamespace(predict_rgb=lambda _: next(predictions))
+        frames = [np.zeros((2, 2, 3), dtype=np.uint8) for _ in range(3)]
+
+        result = analyze_frames(
+            classifier,
+            frames,
+            confidence_threshold=.75,
+            margin_threshold=.15,
+            validity_threshold=.60,
+        )
+
+        self.assertAlmostEqual(result.supported_probability, .40)
+        self.assertAlmostEqual(result.prototype_distance, .12)
+        self.assertIsNone(result.decision.route)
+        self.assertIn("validity head", result.decision.reason)
+
+    def test_metal_sensor_disagreement_rejects_visual_route(self) -> None:
+        rows = [{"plastic": .91, "general": .05, "metal": .04} for _ in range(3)]
+        frames = [np.zeros((2, 2, 3), dtype=np.uint8) for _ in rows]
+
+        result = analyze_frames(
+            FakeClassifier(rows),
+            frames,
+            confidence_threshold=.75,
+            margin_threshold=.15,
+            metal_detected=True,
+        )
+
+        self.assertIsNone(result.decision.route)
+        self.assertIn("metal sensor", result.decision.reason)
+
     def test_live_actuation_returns_deadline_without_sleeping(self) -> None:
         lids = FakeLids()
         result = AnalysisResult(

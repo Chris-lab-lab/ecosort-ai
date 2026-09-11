@@ -83,6 +83,10 @@ class AnalysisResult:
     decision: Decision
     frame_count: int
     agreement: float
+    supported_probability: float | None = None
+    prototype_distance: float | None = None
+    prototype_threshold: float | None = None
+    metal_detected: bool | None = None
 
 
 def analyze_frames(
@@ -92,19 +96,44 @@ def analyze_frames(
     confidence_threshold: float,
     margin_threshold: float,
     agreement_threshold: float = 0.8,
+    validity_threshold: float = 0.5,
+    metal_detected: bool | None = None,
 ) -> AnalysisResult:
     """Infer several ROI frames and apply the normal conservative router."""
 
     frames = tuple(rgb_frames)
-    predictions = [classifier.predict_rgb(frame).scores for frame in frames]
-    scores = average_scores(predictions)
+    frame_predictions = [classifier.predict_rgb(frame) for frame in frames]
+    score_rows = [prediction.scores for prediction in frame_predictions]
+    scores = average_scores(score_rows)
+    winner = max(scores, key=scores.get)
+
+    validity_rows = [getattr(prediction, "supported_probability", None) for prediction in frame_predictions]
+    supported_probability = (
+        float(np.mean(validity_rows)) if all(value is not None for value in validity_rows) else None
+    )
+    distance_rows = [getattr(prediction, "prototype_distances", None) for prediction in frame_predictions]
+    prototype_distance = (
+        float(np.mean([row[winner] for row in distance_rows]))
+        if all(row is not None and winner in row for row in distance_rows)
+        else None
+    )
+    threshold_rows = [getattr(prediction, "prototype_thresholds", None) for prediction in frame_predictions]
+    prototype_threshold = (
+        float(threshold_rows[0][winner])
+        if threshold_rows and threshold_rows[0] is not None and winner in threshold_rows[0]
+        else None
+    )
     decision = decide_route(
         scores,
         confidence_threshold=confidence_threshold,
         margin_threshold=margin_threshold,
+        supported_probability=supported_probability,
+        validity_threshold=validity_threshold,
+        prototype_distance=prototype_distance,
+        prototype_threshold=prototype_threshold,
+        metal_detected=metal_detected,
     )
-    winner = max(scores, key=scores.get)
-    agreement = sum(max(row, key=row.get) == winner for row in predictions) / len(predictions)
+    agreement = sum(max(row, key=row.get) == winner for row in score_rows) / len(score_rows)
     if decision.accepted and agreement < agreement_threshold:
         decision = Decision(
             label=decision.label,
@@ -118,6 +147,10 @@ def analyze_frames(
         decision=decision,
         frame_count=len(frames),
         agreement=agreement,
+        supported_probability=supported_probability,
+        prototype_distance=prototype_distance,
+        prototype_threshold=prototype_threshold,
+        metal_detected=metal_detected,
     )
 
 
@@ -127,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model", required=True, help="TFLite or Vela-compiled model")
     parser.add_argument("--labels", required=True, help="One label per model output line")
+    parser.add_argument(
+        "--metadata",
+        type=Path,
+        help="optional open_set.json path (auto-detected beside the model)",
+    )
     parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index")
     parser.add_argument("--camera-width", type=int, default=1280)
     parser.add_argument("--camera-height", type=int, default=720)
@@ -134,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threads", type=int, default=2, help="TFLite CPU thread count")
     parser.add_argument("--threshold", type=float, default=0.75)
     parser.add_argument("--margin", type=float, default=0.15)
+    parser.add_argument(
+        "--validity-threshold",
+        type=float,
+        help="override the calibrated supported-item threshold stored in open_set.json",
+    )
     parser.add_argument(
         "--agreement",
         type=float,
@@ -175,6 +218,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="JSON file with per-lid PCA9685 channels and calibrated pulses",
     )
+    parser.add_argument(
+        "--metal-sensor-path",
+        type=Path,
+        help="read an already-configured digital metal sensor value file on Linux",
+    )
+    parser.add_argument(
+        "--metal-sensor-active-low",
+        action="store_true",
+        help="treat a low digital sensor value as metal detected",
+    )
 
     hardware = parser.add_mutually_exclusive_group()
     hardware.add_argument(
@@ -198,6 +251,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--threshold must be between 0 and 1")
     if not 0.0 <= args.margin <= 1.0:
         parser.error("--margin must be between 0 and 1")
+    if args.validity_threshold is not None and not 0.0 <= args.validity_threshold <= 1.0:
+        parser.error("--validity-threshold must be between 0 and 1")
     if not 0.0 <= args.agreement <= 1.0:
         parser.error("--agreement must be between 0 and 1")
     if args.average_frames < 1:
@@ -283,7 +338,7 @@ def _draw_overlay(
     )
 
     panel_width = min(width, 570)
-    panel_height = 270 if result else 126
+    panel_height = 294 if result else 126
     panel = frame[0 : min(panel_height, height), 0:panel_width]
     shade = np.zeros_like(panel)
     cv2.addWeighted(shade, 0.58, panel, 0.42, 0, panel)
@@ -349,6 +404,17 @@ def _draw_overlay(
             (14, 208),
             scale=0.50,
         )
+        open_set_bits = []
+        if result.supported_probability is not None:
+            open_set_bits.append(f"supported: {result.supported_probability:.1%}")
+        if result.prototype_distance is not None and result.prototype_threshold is not None:
+            open_set_bits.append(
+                f"feature distance: {result.prototype_distance:.3f}/{result.prototype_threshold:.3f}"
+            )
+        if result.metal_detected is not None:
+            open_set_bits.append(f"metal sensor: {'YES' if result.metal_detected else 'no'}")
+        if open_set_bits:
+            _put_text(cv2, frame, "  ".join(open_set_bits), (14, 231), scale=0.47)
         if result.decision.accepted and result.decision.route in SAFE_LID_ROUTES:
             decision_text = f"Decision: OPEN {result.decision.route.upper()}"
             decision_color = (70, 235, 70)
@@ -359,7 +425,7 @@ def _draw_overlay(
             cv2,
             frame,
             decision_text,
-            (14, 234),
+            (14, 257),
             color=decision_color,
             scale=0.57,
             thickness=2,
@@ -406,6 +472,17 @@ def _print_result(result: AnalysisResult, *, dry_run: bool) -> None:
         f"Consensus ({result.frame_count} frames, {result.agreement:.0%} winner agreement): "
         f"{summary}"
     )
+    diagnostics = []
+    if result.supported_probability is not None:
+        diagnostics.append(f"supported={result.supported_probability:.1%}")
+    if result.prototype_distance is not None and result.prototype_threshold is not None:
+        diagnostics.append(
+            f"feature_distance={result.prototype_distance:.3f}/{result.prototype_threshold:.3f}"
+        )
+    if result.metal_detected is not None:
+        diagnostics.append(f"metal_sensor={'yes' if result.metal_detected else 'no'}")
+    if diagnostics:
+        print("Safety checks: " + ", ".join(diagnostics))
     if result.decision.accepted and result.decision.route in SAFE_LID_ROUTES:
         suffix = " [dry run]" if dry_run else ""
         print(
@@ -455,6 +532,7 @@ def run(args: argparse.Namespace) -> None:
         args.labels,
         delegate=delegate,
         threads=args.threads,
+        metadata_path=args.metadata,
     )
     labels = set(classifier.labels)
     middle_labels = labels & {"paper", "general"}
@@ -464,7 +542,10 @@ def run(args: argparse.Namespace) -> None:
             "The demo requires plastic, metal, exactly one of general/paper, "
             "and optionally other"
         )
-    if "other" not in labels:
+    supports_unknown_rejection = getattr(
+        classifier, "supports_unknown_rejection", "other" in labels
+    )
+    if not supports_unknown_rejection:
         if not args.dry_run:
             raise RuntimeError(
                 "Live hardware requires a model with an 'other' class; "
@@ -474,6 +555,11 @@ def run(args: argparse.Namespace) -> None:
             "WARNING: this model has no 'other' class. Treat results as classification-only; "
             "unsupported items may be assigned to a known class."
         )
+    validity_threshold = (
+        args.validity_threshold
+        if args.validity_threshold is not None
+        else getattr(classifier, "recommended_validity_threshold", 0.5)
+    )
     middle_label = next(iter(middle_labels))
     correction_keys = dict(CORRECTION_KEYS)
     correction_keys[ord("g")] = middle_label
@@ -483,6 +569,24 @@ def run(args: argparse.Namespace) -> None:
     print(f"Starting in {'DRY RUN' if args.dry_run else 'LIVE HARDWARE'} mode")
 
     from ecosort_hw.lids import LidController
+    from ecosort_hw.sensors import DigitalMetalSensor
+
+    metal_sensor = (
+        DigitalMetalSensor(args.metal_sensor_path, active_low=args.metal_sensor_active_low)
+        if args.metal_sensor_path is not None
+        else None
+    )
+
+    def analyze_buffer(frames: tuple[np.ndarray, ...]) -> AnalysisResult:
+        return analyze_frames(
+            classifier,
+            frames,
+            confidence_threshold=args.threshold,
+            margin_threshold=args.margin,
+            agreement_threshold=args.agreement,
+            validity_threshold=validity_threshold,
+            metal_detected=metal_sensor.read() if metal_sensor is not None else None,
+        )
 
     frame_buffer: deque[np.ndarray] = deque(maxlen=args.average_frames)
     last_result: AnalysisResult | None = None
@@ -543,13 +647,7 @@ def run(args: argparse.Namespace) -> None:
                     )
                     if should_auto_analyze:
                         try:
-                            last_result = analyze_frames(
-                                classifier,
-                                tuple(frame_buffer),
-                                confidence_threshold=args.threshold,
-                                margin_threshold=args.margin,
-                                agreement_threshold=args.agreement,
-                            )
+                            last_result = analyze_buffer(tuple(frame_buffer))
                             _print_result(last_result, dry_run=args.dry_run)
                             lid_close_deadline = _apply_decision(
                                 lids,
@@ -620,13 +718,7 @@ def run(args: argparse.Namespace) -> None:
                             )
                             continue
                         try:
-                            last_result = analyze_frames(
-                                classifier,
-                                tuple(frame_buffer),
-                                confidence_threshold=args.threshold,
-                                margin_threshold=args.margin,
-                                agreement_threshold=args.agreement,
-                            )
+                            last_result = analyze_buffer(tuple(frame_buffer))
                             _print_result(last_result, dry_run=args.dry_run)
                             lid_close_deadline = _apply_decision(
                                 lids,

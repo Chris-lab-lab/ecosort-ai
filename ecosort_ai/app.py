@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 
 from .camera import OpenCVCamera, read_rgb_image
 from .decision import decide_route
@@ -20,11 +21,21 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="EcoSort camera classifier and three-lid controller")
     p.add_argument("--model", required=True, help="TFLite or Vela-compiled TFLite model")
     p.add_argument("--labels", required=True, help="One label per line in model output order")
+    p.add_argument(
+        "--metadata",
+        type=Path,
+        help="optional open_set.json path (auto-detected beside the model)",
+    )
     p.add_argument("--image", help="Classify one image instead of opening a camera")
     p.add_argument("--camera", type=int, default=0)
     p.add_argument("--delegate", default="auto", help="auto, none, or delegate .so path")
     p.add_argument("--threshold", type=float, default=0.75)
     p.add_argument("--margin", type=float, default=0.15)
+    p.add_argument(
+        "--validity-threshold",
+        type=float,
+        help="override the calibrated supported-item threshold stored in open_set.json",
+    )
     hardware = p.add_mutually_exclusive_group()
     hardware.add_argument(
         "--dry-run",
@@ -60,10 +71,34 @@ def classify_and_route(classifier: WasteClassifier, rgb, lids, args) -> None:
         prediction.scores,
         confidence_threshold=args.threshold,
         margin_threshold=args.margin,
+        supported_probability=prediction.supported_probability,
+        validity_threshold=(
+            args.validity_threshold
+            if args.validity_threshold is not None
+            else classifier.recommended_validity_threshold
+        ),
+        prototype_distance=(
+            prediction.prototype_distances.get(prediction.top[0])
+            if prediction.prototype_distances is not None
+            else None
+        ),
+        prototype_threshold=(
+            prediction.prototype_thresholds.get(prediction.top[0])
+            if prediction.prototype_thresholds is not None
+            else None
+        ),
     )
     print("\nScores:")
     for label, score in sorted(prediction.scores.items(), key=lambda item: item[1], reverse=True):
         print(f"  {label:8s} {score:.1%}")
+    if prediction.supported_probability is not None:
+        print(f"  supported {prediction.supported_probability:.1%}")
+    if prediction.prototype_distances is not None:
+        winner = prediction.top[0]
+        print(
+            f"  feature distance {prediction.prototype_distances[winner]:.3f}/"
+            f"{prediction.prototype_thresholds[winner]:.3f}"
+        )
 
     if not decision.accepted:
         print(f"NO LID OPENED: {decision.reason}")
@@ -82,6 +117,8 @@ def main() -> None:
         command.error("--threshold must be between 0 and 1")
     if not 0.0 <= args.margin <= 1.0:
         command.error("--margin must be between 0 and 1")
+    if args.validity_threshold is not None and not 0.0 <= args.validity_threshold <= 1.0:
+        command.error("--validity-threshold must be between 0 and 1")
     if args.hold_open < 0:
         command.error("--hold-open cannot be negative")
     if not args.dry_run and args.i2c_bus is None:
@@ -92,7 +129,12 @@ def main() -> None:
             "use `python3 -m ecosort_ai.live_demo ... --live --i2c-bus BUS`"
         )
     delegate = None if args.delegate.lower() == "none" else args.delegate
-    classifier = WasteClassifier(args.model, args.labels, delegate=delegate)
+    classifier = WasteClassifier(
+        args.model,
+        args.labels,
+        delegate=delegate,
+        metadata_path=args.metadata,
+    )
     labels = set(classifier.labels)
     middle = labels & {"general", "paper"}
     expected = {"plastic", "metal"} | middle
@@ -101,7 +143,7 @@ def main() -> None:
             "The model must contain plastic, metal, exactly one of general/paper, "
             "and optionally other"
         )
-    if "other" not in labels:
+    if not classifier.supports_unknown_rejection:
         print(
             "WARNING: this model has no 'other' class. Treat results as classification-only; "
             "unsupported items may be assigned to a known class."

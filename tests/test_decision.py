@@ -27,6 +27,34 @@ class DecisionTests(unittest.TestCase):
                               metal_detected=True)
         self.assertIsNone(result.route)
 
+    def test_validity_head_can_reject_a_confident_material(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            supported_probability=.18,
+            validity_threshold=.6,
+        )
+        self.assertIsNone(result.route)
+        self.assertIn("validity", result.reason)
+
+    def test_distant_feature_embedding_is_rejected(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            supported_probability=.95,
+            prototype_distance=.31,
+            prototype_threshold=.20,
+        )
+        self.assertIsNone(result.route)
+        self.assertIn("feature space", result.reason)
+
+    def test_dual_head_and_feature_checks_accept_known_item(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            supported_probability=.95,
+            prototype_distance=.08,
+            prototype_threshold=.20,
+        )
+        self.assertEqual(result.route, "plastic")
+
     def test_nan_score_never_routes(self):
         result = decide_route({"plastic": math.nan, "paper": .4, "metal": .3, "other": .3})
         self.assertIsNone(result.route)
