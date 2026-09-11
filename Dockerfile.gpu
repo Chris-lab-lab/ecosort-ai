@@ -1,5 +1,0 @@
-FROM tensorflow/tensorflow:2.18.0-gpu
-
-RUN python -m pip install --no-cache-dir "Pillow>=10,<12"
-
-WORKDIR /workspace

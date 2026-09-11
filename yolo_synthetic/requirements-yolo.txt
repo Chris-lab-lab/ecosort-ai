@@ -1,2 +1,0 @@
-# Install into .venv-yolo, separate from the existing TensorFlow environment.
-ultralytics

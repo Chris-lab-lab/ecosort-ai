@@ -55,7 +55,7 @@ def main() -> None:
     if args.require_gpu and not gpu_devices:
         raise SystemExit(
             "--require-gpu was specified, but TensorFlow cannot see a GPU. "
-            "On Windows, use WSL2 or the supplied Docker GPU launcher."
+            "Native Windows TensorFlow runs on the CPU; use a supported Linux/WSL2 GPU setup."
         )
     for device in gpu_devices:
         try:

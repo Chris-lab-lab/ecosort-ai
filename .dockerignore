@@ -1,9 +1,0 @@
-.cache/
-.git/
-.venv/
-__pycache__/
-artifacts*/
-corrections/
-dataset*/
-yolo_synthetic/datasets/
-*.pyc

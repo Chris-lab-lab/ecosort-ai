@@ -77,25 +77,6 @@ live lid actuation remains blocked until the training data includes a representa
 class. The trainer applies inverse-frequency class weights by default; pass
 `--no-class-balance` only when the dataset is already balanced or deliberately sampled.
 
-### Train with an NVIDIA GPU on Windows
-
-TensorFlow 2.11 and newer do not support CUDA on native Windows. This project includes a
-Docker/WSL2 launcher so training can use an NVIDIA GPU while the dataset stays in this folder.
-Start Docker Desktop and wait until it reports that the engine is running, then use PowerShell:
-
-```powershell
-Set-Location "D:\NXP hackathon\indobantaimeichu-main\indobantaimeichu"
-.\RUN_GPU_TRAINING.ps1
-```
-
-The first run downloads/builds the TensorFlow 2.18 GPU container. The launcher refuses to
-train unless TensorFlow detects a GPU and writes its outputs to `artifacts_gpu`. Optional
-settings can be passed directly, for example:
-
-```powershell
-.\RUN_GPU_TRAINING.ps1 -Epochs 10 -FineTuneEpochs 3 -BatchSize 64
-```
-
 For a credible hackathon accuracy number, collect a second session on a different background or day with `python dataset_studio.py --output validation_data`, then train with `--validation-data validation_data`. This prevents neighboring webcam frames from appearing in both training and validation. The simple command above uses a reproducible 80/20 file split for quick experiments.
 
 ### Add reviewed TACO examples
@@ -107,7 +88,7 @@ dataset using hard links when the filesystem supports them:
 
 ```powershell
 python scripts\import_taco.py
-python train.py --data dataset_enhanced --output artifacts_enhanced
+python train.py --data dataset_enhanced --output artifacts
 ```
 
 The generated `dataset_enhanced/taco_import_report.json` records the category mapping and
