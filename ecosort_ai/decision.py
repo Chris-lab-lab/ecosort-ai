@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import math
 
@@ -33,7 +34,12 @@ def decide_route(
     validity_threshold: float = 0.5,
     prototype_distance: float | None = None,
     prototype_threshold: float | None = None,
+    class_confidence_thresholds: Mapping[str, float] | None = None,
     metal_detected: bool | None = None,
+    object_present: bool | None = None,
+    hand_present: bool | None = None,
+    weight_value: float | None = None,
+    weight_range: tuple[float, float] | None = None,
 ) -> Decision:
     """Choose a bin conservatively.
 
@@ -61,6 +67,23 @@ def decide_route(
 
     if label not in ROUTABLE_CLASSES:
         return Decision(label, confidence, margin, None, "unknown/other item")
+    if object_present is False:
+        return Decision(label, confidence, margin, None, "presence sensor sees no item")
+    if hand_present is True:
+        return Decision(label, confidence, margin, None, "hand detected; remove hand before opening a lid")
+    if weight_value is not None or weight_range is not None:
+        if weight_value is None or weight_range is None:
+            return Decision(label, confidence, margin, None, "incomplete weight-sensor limits")
+        lower, upper = weight_range
+        if (
+            not math.isfinite(weight_value)
+            or not math.isfinite(lower)
+            or not math.isfinite(upper)
+            or lower > upper
+        ):
+            return Decision(label, confidence, margin, None, "invalid weight-sensor reading")
+        if not lower <= weight_value <= upper:
+            return Decision(label, confidence, margin, None, "item weight is outside safe limits")
     if supported_probability is not None:
         if not math.isfinite(validity_threshold) or not 0.0 <= validity_threshold <= 1.0:
             return Decision(label, confidence, margin, None, "invalid validity threshold")
@@ -80,8 +103,20 @@ def decide_route(
             return Decision(label, confidence, margin, None, "invalid feature-distance score")
         if prototype_distance > prototype_threshold:
             return Decision(label, confidence, margin, None, "outside known-class feature space")
-    if confidence < confidence_threshold:
-        return Decision(label, confidence, margin, None, "confidence below threshold")
+    required_confidence = confidence_threshold
+    if class_confidence_thresholds is not None and label in class_confidence_thresholds:
+        class_threshold = float(class_confidence_thresholds[label])
+        if not math.isfinite(class_threshold) or not 0.0 <= class_threshold <= 1.0:
+            return Decision(label, confidence, margin, None, "invalid per-class threshold")
+        required_confidence = max(required_confidence, class_threshold)
+    if confidence < required_confidence:
+        return Decision(
+            label,
+            confidence,
+            margin,
+            None,
+            f"confidence below {label} threshold ({required_confidence:.0%})",
+        )
     if margin < margin_threshold:
         return Decision(label, confidence, margin, None, "top classes are too close")
     if metal_detected is True and label != "metal":

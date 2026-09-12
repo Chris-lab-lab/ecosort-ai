@@ -8,7 +8,11 @@ from typing import Any
 
 import numpy as np
 
-from ecosort_ai.evaluation import calibrate_validity_threshold, confusion_metrics
+from ecosort_ai.evaluation import (
+    calibrate_class_confidence_thresholds,
+    calibrate_validity_threshold,
+    confusion_metrics,
+)
 
 
 REQUIRED_CLASSES = {"metal", "plastic"}
@@ -30,6 +34,36 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--fine-tune-epochs", type=int, default=5)
+    parser.add_argument(
+        "--synthetic-reject-ratio",
+        type=float,
+        default=0.25,
+        help="extra blurred/dark/empty/CutMix reject examples per training batch",
+    )
+    parser.add_argument(
+        "--eos-weight",
+        type=float,
+        default=0.15,
+        help="weight for entropic open-set loss on unknown examples",
+    )
+    parser.add_argument(
+        "--deployment-confidence",
+        type=float,
+        default=0.75,
+        help="global confidence floor used during exported-model evaluation",
+    )
+    parser.add_argument(
+        "--deployment-margin",
+        type=float,
+        default=0.15,
+        help="winner/runner-up margin used during exported-model evaluation",
+    )
+    parser.add_argument(
+        "--target-route-precision",
+        type=float,
+        default=0.90,
+        help="minimum validation precision requested for each material route",
+    )
     parser.add_argument("--embedding-size", type=int, default=64)
     parser.add_argument(
         "--prototype-samples-per-class",
@@ -74,6 +108,14 @@ def arguments() -> argparse.Namespace:
         parser.error("batch size and epochs must be positive; fine-tune epochs may be zero")
     if args.embedding_size < 4:
         parser.error("--embedding-size must be at least 4")
+    if not 0.0 <= args.synthetic_reject_ratio <= 1.0 or args.eos_weight < 0.0:
+        parser.error("synthetic reject ratio must be in 0..1 and EOS weight cannot be negative")
+    if not 0.0 <= args.deployment_confidence <= 1.0:
+        parser.error("--deployment-confidence must be between 0 and 1")
+    if not 0.0 <= args.deployment_margin <= 1.0:
+        parser.error("--deployment-margin must be between 0 and 1")
+    if not 0.0 < args.target_route_precision <= 1.0:
+        parser.error("--target-route-precision must be greater than 0 and at most 1")
     if args.prototype_samples_per_class < 1:
         parser.error("--prototype-samples-per-class must be at least 1")
     if not 50.0 <= args.prototype_percentile <= 100.0:
@@ -158,11 +200,21 @@ def _open_set_prediction(
     validity_threshold: float,
     prototypes: dict[str, list[float]],
     prototype_thresholds: dict[str, float],
+    confidence_thresholds: dict[str, float],
+    margin_threshold: float,
 ) -> str:
-    label = material_names[int(np.argmax(material_scores))]
+    order = np.argsort(material_scores)[::-1]
+    label = material_names[int(order[0])]
+    confidence = float(material_scores[order[0]])
+    runner_up = float(material_scores[order[1]])
     normalized = embedding / max(float(np.linalg.norm(embedding)), 1e-8)
     distance = max(0.0, 1.0 - float(np.dot(normalized, prototypes[label])))
-    if supported_probability < validity_threshold or distance > prototype_thresholds[label]:
+    if (
+        supported_probability < validity_threshold
+        or distance > prototype_thresholds[label]
+        or confidence < confidence_thresholds[label]
+        or confidence - runner_up < margin_threshold
+    ):
         return "other"
     return label
 
@@ -297,10 +349,20 @@ def main() -> None:
         material_output = tf.keras.layers.Dense(
             len(material_names), activation="softmax", name="material"
         )(dropped)
+        # The duplicate training-only output applies EOS loss to reject examples
+        # while the normal material loss/metric ignores them. It is removed from
+        # the deployment model below.
+        eos_output = tf.keras.layers.Activation("linear", name="eos_material")(
+            material_output
+        )
         validity_output = tf.keras.layers.Dense(1, activation="sigmoid", name="validity")(dropped)
         model = tf.keras.Model(
             inputs,
-            {"material": material_output, "validity": validity_output},
+            {
+                "material": material_output,
+                "eos_material": eos_output,
+                "validity": validity_output,
+            },
             name="ecosort_v2_mobilenetv2",
         )
 
@@ -317,10 +379,16 @@ def main() -> None:
                 material_weights[original_index] = known_count / (
                     len(material_names) * class_counts[name]
                 )
+        synthetic_reject_count = int(round(total_images * args.synthetic_reject_ratio))
+        effective_other_count = class_counts["other"] + synthetic_reject_count
+        effective_total = known_count + effective_other_count
         validity_weights = np.ones(2, dtype=np.float32)
         if not args.no_class_balance:
             validity_weights = np.asarray(
-                [total_images / (2 * class_counts["other"]), total_images / (2 * known_count)],
+                [
+                    effective_total / (2 * effective_other_count),
+                    effective_total / (2 * known_count),
+                ],
                 dtype=np.float32,
             )
         if not args.no_class_balance:
@@ -334,11 +402,38 @@ def main() -> None:
             }
         material_weight_lookup = tf.constant(material_weights)
         validity_weight_lookup = tf.constant(validity_weights)
+        synthetic_per_batch = int(round(args.batch_size * args.synthetic_reject_ratio))
+
+        def create_synthetic_rejects(images: Any) -> Any:
+            count = tf.minimum(tf.shape(images)[0], synthetic_per_batch)
+            source = images[:count]
+            partner = tf.reverse(source, axis=[0])
+            midpoint = tf.shape(source)[2] // 2
+            cutmix = tf.concat([source[:, :, :midpoint, :], partner[:, :, midpoint:, :]], axis=2)
+            blurred = tf.nn.avg_pool2d(source, ksize=31, strides=1, padding="SAME")
+            dark = tf.clip_by_value(source * 0.08, 0.0, 255.0)
+            empty = tf.ones_like(source) * tf.reduce_mean(source, axis=[1, 2], keepdims=True)
+            modes = tf.math.mod(tf.range(count), 4)
+            result = tf.where((modes == 0)[:, None, None, None], cutmix, blurred)
+            result = tf.where((modes == 2)[:, None, None, None], dark, result)
+            return tf.where((modes == 3)[:, None, None, None], empty, result)
 
         def prepare(images: Any, labels: Any, *, augment: bool) -> tuple[Any, Any, Any]:
+            images = augmentation(images, training=True) if augment else images
+            if augment and synthetic_per_batch:
+                synthetic = create_synthetic_rejects(images)
+                images = tf.concat([images, synthetic], axis=0)
+                labels = tf.concat(
+                    [labels, tf.fill([tf.shape(synthetic)[0]], tf.cast(other_index, labels.dtype))],
+                    axis=0,
+                )
             supported = tf.cast(tf.not_equal(labels, other_index), tf.float32)
+            eos_targets = tf.ones(
+                [tf.shape(labels)[0], len(material_names)], dtype=tf.float32
+            ) / len(material_names)
             targets = {
                 "material": tf.gather(material_lookup, labels),
+                "eos_material": eos_targets,
                 "validity": supported[:, None],
             }
             material_sample_weight = (
@@ -348,10 +443,11 @@ def main() -> None:
             )
             sample_weights = {
                 "material": material_sample_weight,
+                "eos_material": (1.0 - supported)
+                * tf.gather(validity_weight_lookup, tf.zeros_like(labels)),
                 "validity": tf.gather(validity_weight_lookup, tf.cast(supported, tf.int32)),
             }
-            prepared_images = augmentation(images, training=True) if augment else images
-            return prepared_images, targets, sample_weights
+            return images, targets, sample_weights
 
         training = train_raw.map(
             lambda images, labels: prepare(images, labels, augment=True),
@@ -367,9 +463,14 @@ def main() -> None:
                 optimizer=tf.keras.optimizers.Adam(learning_rate),
                 loss={
                     "material": tf.keras.losses.SparseCategoricalCrossentropy(),
+                    "eos_material": tf.keras.losses.CategoricalCrossentropy(),
                     "validity": tf.keras.losses.BinaryCrossentropy(),
                 },
-                loss_weights={"material": 1.0, "validity": 0.5},
+                loss_weights={
+                    "material": 1.0,
+                    "eos_material": args.eos_weight,
+                    "validity": 0.5,
+                },
                 weighted_metrics={
                     "material": [tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
                     "validity": [
@@ -458,20 +559,45 @@ def main() -> None:
     validity_balanced_accuracy: float | None = None
     prototypes: dict[str, list[float]] = {}
     prototype_thresholds: dict[str, float] = {}
+    material_confidence_thresholds = {
+        name: args.deployment_confidence for name in material_names
+    }
+    material_threshold_reports: dict[str, dict[str, float | int]] = {}
     embedding_model: Any | None = None
 
     if open_set_v2:
         validation_validity: list[float] = []
         validation_targets: list[int] = []
+        validation_material: list[list[float]] = []
+        validation_material_targets: list[int] = []
         for images, original_labels in validation_raw:
             outputs = model(images, training=False)
             validation_validity.extend(np.asarray(outputs["validity"]).reshape(-1).tolist())
             validation_targets.extend(
                 (original_labels.numpy() != class_names.index("other")).astype(np.int8).tolist()
             )
+            validation_material.extend(np.asarray(outputs["material"]).tolist())
+            validation_material_targets.extend(
+                [
+                    material_names.index(class_names[int(index)])
+                    if class_names[int(index)] in material_names
+                    else -1
+                    for index in original_labels.numpy()
+                ]
+            )
         validity_threshold, validity_balanced_accuracy = calibrate_validity_threshold(
             validation_validity, validation_targets
         )
+        calibrated_thresholds, threshold_reports = calibrate_class_confidence_thresholds(
+            validation_material,
+            validation_material_targets,
+            minimum_precision=args.target_route_precision,
+            floor=args.deployment_confidence,
+        )
+        material_confidence_thresholds = dict(
+            zip(material_names, calibrated_thresholds, strict=True)
+        )
+        material_threshold_reports = dict(zip(material_names, threshold_reports, strict=True))
         embedding_model = tf.keras.Model(
             model.input, model.get_layer("embedding_features").output
         )
@@ -505,6 +631,14 @@ def main() -> None:
             "prototype_percentile": args.prototype_percentile,
             "prototypes": prototypes,
             "prototype_thresholds": prototype_thresholds,
+            "material_confidence_thresholds": material_confidence_thresholds,
+            "material_threshold_calibration": material_threshold_reports,
+            "target_route_precision": args.target_route_precision,
+            "deployment_margin": args.deployment_margin,
+            "training": {
+                "eos_weight": args.eos_weight,
+                "synthetic_reject_ratio": args.synthetic_reject_ratio,
+            },
         }
         (output / "open_set.json").write_text(
             json.dumps(open_set_metadata, indent=2), encoding="utf-8"
@@ -532,6 +666,8 @@ def main() -> None:
                         float(validity_threshold),
                         prototypes,
                         prototype_thresholds,
+                        material_confidence_thresholds,
+                        args.deployment_margin,
                     )
                     for material_scores, supported_probability, embedding_value in zip(
                         material_batch, validity_batch, embedding_batch, strict=True
@@ -618,6 +754,8 @@ def main() -> None:
                         float(validity_threshold),
                         prototypes,
                         prototype_thresholds,
+                        material_confidence_thresholds,
+                        args.deployment_margin,
                     )
                     predicted_index = class_names.index(predicted_label)
                 else:
@@ -668,6 +806,11 @@ def main() -> None:
         "wrong_lid_activation_rate": wrong_lid_activations / max(sum(map(sum, confusion_matrix)), 1),
         "validity_threshold": validity_threshold,
         "validity_balanced_accuracy": validity_balanced_accuracy,
+        "material_confidence_thresholds": material_confidence_thresholds,
+        "material_threshold_calibration": material_threshold_reports,
+        "deployment_margin": args.deployment_margin,
+        "eos_weight": args.eos_weight if open_set_v2 else None,
+        "synthetic_reject_ratio": args.synthetic_reject_ratio if open_set_v2 else None,
         "quantized_confusion_matrix": {
             "row_and_column_labels": class_names,
             "rows_are_actual_columns_are_predicted": confusion_matrix,

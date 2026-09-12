@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from ecosort_ai.evaluation import calibrate_validity_threshold, confusion_metrics
+from ecosort_ai.evaluation import (
+    calibrate_class_confidence_thresholds,
+    calibrate_validity_threshold,
+    confusion_metrics,
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -26,6 +30,23 @@ class EvaluationTests(unittest.TestCase):
         self.assertAlmostEqual(result["accuracy"], 0.85)
         self.assertAlmostEqual(result["macro_recall"], 0.85)
         self.assertEqual(len(result["per_class"]), 2)
+
+    def test_class_thresholds_raise_boundary_until_precision_is_met(self) -> None:
+        thresholds, reports = calibrate_class_confidence_thresholds(
+            [
+                [.95, .03, .02],
+                [.70, .20, .10],
+                [.05, .90, .05],
+                [.05, .10, .85],
+            ],
+            [0, 1, 1, 2],
+            minimum_precision=.90,
+            floor=.60,
+        )
+
+        self.assertEqual(thresholds[0], .95)
+        self.assertEqual(reports[0]["accepted_validation_samples"], 1)
+        self.assertEqual(thresholds[1:], [.60, .60])
 
 
 if __name__ == "__main__":

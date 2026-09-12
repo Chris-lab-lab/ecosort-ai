@@ -42,6 +42,68 @@ def calibrate_validity_threshold(
     return best_threshold, best_score
 
 
+def calibrate_class_confidence_thresholds(
+    probabilities: Iterable[Iterable[float]],
+    targets: Iterable[int],
+    *,
+    minimum_precision: float = 0.90,
+    floor: float = 0.50,
+) -> tuple[list[float], list[dict[str, float | int]]]:
+    """Find a conservative confidence boundary for each predicted class.
+
+    Targets outside ``0..class_count-1`` are treated as unknown/incorrect. If
+    no threshold reaches the requested precision, that route is disabled with
+    a threshold of 1.0 and the calibration report makes the reason visible.
+    """
+
+    scores = np.asarray(tuple(tuple(row) for row in probabilities), dtype=np.float64)
+    expected = np.asarray(tuple(targets), dtype=np.int64)
+    if scores.ndim != 2 or not scores.shape[0] or scores.shape[1] < 2:
+        raise ValueError("probabilities must be a non-empty two-dimensional matrix")
+    if expected.shape != (scores.shape[0],):
+        raise ValueError("targets length must match the probability rows")
+    if not np.all(np.isfinite(scores)) or np.any((scores < 0.0) | (scores > 1.0)):
+        raise ValueError("class probabilities must be finite and between 0 and 1")
+    if not 0.0 < minimum_precision <= 1.0 or not 0.0 <= floor <= 1.0:
+        raise ValueError("minimum precision and floor must be in 0..1")
+
+    winners = np.argmax(scores, axis=1)
+    confidences = np.max(scores, axis=1)
+    thresholds: list[float] = []
+    reports: list[dict[str, float | int]] = []
+    for class_index in range(scores.shape[1]):
+        predicted_here = winners == class_index
+        candidates = np.unique(
+            np.concatenate(([floor], confidences[predicted_here & (confidences >= floor)], [1.0]))
+        )
+        chosen = 1.0
+        chosen_precision = 0.0
+        chosen_count = 0
+        for threshold in candidates:
+            accepted = predicted_here & (confidences >= threshold)
+            count = int(accepted.sum())
+            if not count:
+                continue
+            precision = float(np.mean(expected[accepted] == class_index))
+            if precision >= minimum_precision:
+                chosen = float(threshold)
+                chosen_precision = precision
+                chosen_count = count
+                break
+            if threshold == 1.0:
+                chosen_precision = precision
+                chosen_count = count
+        thresholds.append(chosen)
+        reports.append(
+            {
+                "threshold": chosen,
+                "precision": chosen_precision,
+                "accepted_validation_samples": chosen_count,
+            }
+        )
+    return thresholds, reports
+
+
 def confusion_metrics(confusion: Iterable[Iterable[int]]) -> dict[str, object]:
     """Return per-class and macro metrics from a square confusion matrix."""
 

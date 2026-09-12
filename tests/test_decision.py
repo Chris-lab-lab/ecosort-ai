@@ -55,6 +55,31 @@ class DecisionTests(unittest.TestCase):
         )
         self.assertEqual(result.route, "plastic")
 
+    def test_per_class_threshold_can_be_stricter_than_global_threshold(self):
+        result = decide_route(
+            {"plastic": .82, "general": .10, "metal": .08},
+            confidence_threshold=.75,
+            class_confidence_thresholds={"plastic": .88},
+        )
+        self.assertIsNone(result.route)
+        self.assertIn("plastic threshold", result.reason)
+
+    def test_presence_and_weight_sensors_can_reject(self):
+        scores = {"plastic": .94, "general": .04, "metal": .02}
+        self.assertIsNone(decide_route(scores, object_present=False).route)
+        self.assertIsNone(
+            decide_route(scores, weight_value=650.0, weight_range=(5.0, 500.0)).route
+        )
+
+    def test_visible_hand_prevents_actuation(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            hand_present=True,
+        )
+
+        self.assertIsNone(result.route)
+        self.assertIn("hand detected", result.reason)
+
     def test_nan_score_never_routes(self):
         result = decide_route({"plastic": math.nan, "paper": .4, "metal": .3, "other": .3})
         self.assertIsNone(result.route)

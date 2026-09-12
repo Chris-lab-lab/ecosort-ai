@@ -79,9 +79,11 @@ def main() -> None:
         assert prediction.prototype_distances is not None
         assert classifier.supports_unknown_rejection
         assert classifier.has_validity_output
+        assert set(classifier.material_confidence_thresholds) == material_labels
         assert classifier.input["dtype"] == np.uint8
         assert classifier.output["dtype"] == np.uint8
         assert summary["model_type"] == "ecosort_v2_open_set"
+        assert set(summary["material_confidence_thresholds"]) == material_labels
         assert (artifacts / "open_set.json").is_file()
         matrix = summary["quantized_confusion_matrix"]["rows_are_actual_columns_are_predicted"]
         assert sum(sum(row) for row in matrix) == 8

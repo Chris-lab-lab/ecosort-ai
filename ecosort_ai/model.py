@@ -155,6 +155,26 @@ class WasteClassifier:
         if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
             raise ValueError("validity_threshold in open-set metadata must be between 0 and 1")
         self.recommended_validity_threshold = threshold
+        raw_class_thresholds = self.open_set_metadata.get("material_confidence_thresholds", {})
+        if not isinstance(raw_class_thresholds, dict):
+            raise ValueError("material_confidence_thresholds must be a JSON object")
+        self.material_confidence_thresholds: dict[str, float] = {}
+        for label, raw_threshold in raw_class_thresholds.items():
+            normalized_label = str(label).strip().lower()
+            if normalized_label not in self.labels:
+                raise ValueError(
+                    f"Confidence-threshold label {normalized_label!r} is not in labels.txt"
+                )
+            class_threshold = float(raw_threshold)
+            if not math.isfinite(class_threshold) or not 0.0 <= class_threshold <= 1.0:
+                raise ValueError(f"Confidence threshold for {normalized_label} is invalid")
+            self.material_confidence_thresholds[normalized_label] = class_threshold
+        if self.material_confidence_thresholds and set(self.material_confidence_thresholds) != set(
+            self.labels
+        ):
+            raise ValueError(
+                "Open-set metadata needs a confidence threshold for every material label"
+            )
 
         raw_prototypes = self.open_set_metadata.get("prototypes", {})
         raw_thresholds = self.open_set_metadata.get("prototype_thresholds", {})
@@ -296,6 +316,7 @@ class WasteClassifier:
                     self.recommended_validity_threshold if self.has_validity_output else None
                 ),
                 "prototype_rejection": bool(self.prototypes),
+                "material_confidence_thresholds": self.material_confidence_thresholds,
                 "metadata": str(self.metadata_path) if self.metadata_path else None,
                 "runtime": self.runtime_name,
                 "delegate": self.delegate_path or "CPU",

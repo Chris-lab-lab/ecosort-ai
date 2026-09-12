@@ -169,6 +169,25 @@ class ConsensusTests(unittest.TestCase):
         self.assertIsNone(result.decision.route)
         self.assertIn("metal sensor", result.decision.reason)
 
+    def test_hand_guided_classification_never_actuates_while_hand_is_visible(self) -> None:
+        rows = [{"plastic": .91, "general": .05, "metal": .04} for _ in range(3)]
+        frames = [np.zeros((2, 2, 3), dtype=np.uint8) for _ in rows]
+
+        result = analyze_frames(
+            FakeClassifier(rows),
+            frames,
+            confidence_threshold=.75,
+            margin_threshold=.15,
+            hand_present=True,
+            detected_object="bottle",
+            object_confidence=.88,
+            mask_confidence=.93,
+        )
+
+        self.assertEqual(result.detected_object, "bottle")
+        self.assertIsNone(result.decision.route)
+        self.assertIn("hand detected", result.decision.reason)
+
     def test_live_actuation_returns_deadline_without_sleeping(self) -> None:
         lids = FakeLids()
         result = AnalysisResult(
@@ -196,6 +215,15 @@ class ConsensusTests(unittest.TestCase):
                     with contextlib.redirect_stderr(io.StringIO()):
                         with self.assertRaises(SystemExit):
                             _validate_args(parser, args)
+
+    def test_weight_sensor_requires_path_and_both_limits(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--model", "unused.tflite", "--labels", "unused.txt", "--weight-min", "5",
+        ])
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                _validate_args(parser, args)
 
     def test_manual_analysis_consumes_armed_auto_cycle(self) -> None:
         # A then SPACE before the auto delay must never issue a second opening

@@ -87,6 +87,7 @@ def classify_and_route(classifier: WasteClassifier, rgb, lids, args) -> None:
             if prediction.prototype_thresholds is not None
             else None
         ),
+        class_confidence_thresholds=classifier.material_confidence_thresholds,
     )
     print("\nScores:")
     for label, score in sorted(prediction.scores.items(), key=lambda item: item[1], reverse=True):

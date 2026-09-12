@@ -14,6 +14,7 @@ For the selected first demo: **plastic bottles -> Plastic**, **wrappers -> Gener
 
 Windows users can begin with [START_HERE.md](START_HERE.md): double-click `OPEN_CAMERA.cmd`, collect labeled photos, then use `RUN_TRAINING.cmd` and `RUN_DEMO.cmd`.
 The complete training and live inference charts are in [AI_ARCHITECTURE.md](AI_ARCHITECTURE.md).
+Laptop-only segmentation, YOLO-World review, and background-bias audit instructions are in [OFFLINE_TEACHERS.md](OFFLINE_TEACHERS.md).
 
 ```mermaid
 flowchart LR
@@ -150,7 +151,35 @@ python -m ecosort_ai.live_demo `
 
 The V2 metadata is auto-detected when `open_set.json` is beside the model. The overlay displays material confidence, supported probability, feature distance, frame agreement, route/rejection state, and runtime/delegate. Space analyzes manually; `A` arms one automatic analysis; `P/G/M/O` saves the current ROI under `corrections/` for later review and retraining; Q/Escape quits. Auto pauses after every result so one item cannot repeatedly command the servos. It stays in dry-run unless `--live --i2c-bus BUS_NUMBER` is explicitly supplied.
 
+### Laptop-only held-object mode
+
+The optional held-object mode follows the useful part of GazeSAM without requiring the user to look at the item. A GPU worker detects COCO objects and body-pose wrist keypoints, chooses the non-person object nearest a visible wrist (or the object centered in the presentation square when no wrist is visible), and uses its box to prompt EfficientViT-SAM. The isolated crop is then classified by the existing TFLite material model. A visible hand is displayed but always prevents physical lid actuation.
+
+Keep PyTorch isolated in `.teacher-venv`, install the optional detector there, and use the already-downloaded EfficientViT-SAM-L0 checkpoint:
+
+```powershell
+.\.teacher-venv\Scripts\python.exe -m pip install -r requirements-held-object.txt
+```
+
+Then launch the normal TensorFlow demo with the GPU worker enabled:
+
+```powershell
+.\.venv\Scripts\python.exe -m ecosort_ai.live_demo `
+  --model artifacts_v2\waste_classifier_int8.tflite `
+  --labels artifacts_v2\labels.txt `
+  --camera 0 `
+  --frames 5 `
+  --held-object `
+  --dry-run
+```
+
+The first run downloads `yolov8n.pt` and `yolov8n-pose.pt` into ignored `teacher_models/`. The overlay shows the detector label, bounding box, EfficientViT mask, and material result. Use `--require-wrist` to disable the center-square fallback. Use `--object-model PATH` and `--pose-model PATH` to supply compatible custom Ultralytics checkpoints. The stock COCO detector recognizes only its 80 categories; train a TACO-derived detector later for waste-specific object names.
+
+This feature is intentionally laptop-only. It starts a persistent `.teacher-venv` worker instead of installing PyTorch in the TensorFlow environment. Ultralytics and its pretrained models have their own licensing terms; review them before redistribution or commercial use.
+
 If the board exposes an already-configured digital metal detector as a readable value file, add `--metal-sensor-path /sys/class/gpio/gpioN/value`. Add `--metal-sensor-active-low` when electrical low means detected. The demo only reads this input; GPIO direction, pin mux, voltage compatibility, and pull resistors must be configured safely in the BSP/device tree first. A camera/sensor disagreement closes all lids.
+
+An optional presence input can be added with `--presence-sensor-path PATH`; a false reading rejects the item. An optional numeric weight input requires all three arguments `--weight-sensor-path PATH --weight-min MIN --weight-max MAX`; values outside the configured safe range reject the item. Sensor files must already be configured and readable by the BSP.
 
 For a saved photo:
 
