@@ -22,6 +22,7 @@ class SegmentationHelpersTests(unittest.TestCase):
 
         self.assertEqual(decision.status, "accepted")
         self.assertEqual(decision.bbox_xyxy, (30, 25, 70, 75))
+        self.assertAlmostEqual(decision.mask_confidence, 0.475)
 
     def test_rejects_two_distinct_objects(self) -> None:
         first = np.zeros((100, 100), dtype=bool)

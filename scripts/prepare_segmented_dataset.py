@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
@@ -58,6 +58,18 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--multiple-object-ratio", type=float, default=0.30)
     parser.add_argument("--points-per-side", type=int, default=32)
     parser.add_argument(
+        "--points-per-batch",
+        type=int,
+        default=64,
+        help="automatic-mask prompt batch size; larger can be faster but uses more VRAM",
+    )
+    parser.add_argument(
+        "--prompt-mode",
+        choices=("auto", "center"),
+        default="auto",
+        help="center is much faster for datasets containing one centered object",
+    )
+    parser.add_argument(
         "--pred-iou-threshold",
         type=float,
         default=0.70,
@@ -76,17 +88,36 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--detection-threshold", type=float, default=0.25)
     parser.add_argument("--other-label", default="other")
+    parser.add_argument(
+        "--segment-other",
+        action="store_true",
+        help=(
+            "also create object masks for reject/other images; required by "
+            "train_full_model.py when those masks are available"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--mask-only",
+        action="store_true",
+        help="save teacher masks without classifier composite JPEGs",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
         help="keep completed outputs and skip source paths already in the manifest",
     )
     args = parser.parse_args()
-    if args.variants < 1 or args.output_size < 64 or args.points_per_side < 4:
+    if (
+        args.variants < 1
+        or args.output_size < 64
+        or args.points_per_side < 4
+        or args.points_per_batch < 1
+    ):
         parser.error(
-            "variants must be positive, output size >= 64, and points-per-side >= 4"
+            "variants and points-per-batch must be positive, output size >= 64, "
+            "and points-per-side >= 4"
         )
     if not 0.0 < args.min_area_ratio < args.max_area_ratio <= 1.0:
         parser.error("mask area limits are invalid")
@@ -175,25 +206,40 @@ class EfficientViTSamTeacher:
             .eval()
         )
         self.device = device
+        self.prompt_mode = args.prompt_mode
         self.generator = EfficientViTSamAutomaticMaskGenerator(
             model,
             points_per_side=args.points_per_side,
+            points_per_batch=args.points_per_batch,
             pred_iou_thresh=args.pred_iou_threshold,
             stability_score_thresh=args.stability_threshold,
-            min_mask_region_area=64,
+            # OpenCV connected-component cleanup duplicates every full-resolution
+            # mask and can fail on unusually large source images. The downstream
+            # area/center filter already rejects tiny irrelevant proposals.
+            min_mask_region_area=0,
         )
         self.predictor = EfficientViTSamPredictor(model)
 
     def masks(
         self, rgb: np.ndarray, box_xyxy: list[float] | None
     ) -> list[dict[str, Any]]:
-        if box_xyxy is None:
+        if box_xyxy is None and self.prompt_mode == "auto":
             return list(self.generator.generate(rgb))
         self.predictor.set_image(rgb)
-        masks, scores, _ = self.predictor.predict(
-            box=np.asarray(box_xyxy, dtype=np.float32),
-            multimask_output=True,
-        )
+        if box_xyxy is not None:
+            masks, scores, _ = self.predictor.predict(
+                box=np.asarray(box_xyxy, dtype=np.float32),
+                multimask_output=True,
+            )
+        else:
+            height, width = rgb.shape[:2]
+            masks, scores, _ = self.predictor.predict(
+                point_coords=np.asarray(
+                    [[width / 2.0, height / 2.0]], dtype=np.float32
+                ),
+                point_labels=np.ones(1, dtype=np.int32),
+                multimask_output=True,
+            )
         return [
             {
                 "segmentation": mask,
@@ -237,11 +283,15 @@ def main() -> None:
         )
 
     completed: set[str] = set()
+    previous_counts: dict[str, int] = {}
     if args.resume and manifest_path.is_file():
         with manifest_path.open("r", encoding="utf-8") as stream:
             for line in stream:
                 if line.strip():
-                    completed.add(str(json.loads(line)["source"]))
+                    previous = json.loads(line)
+                    completed.add(str(previous["source"]))
+                    status = str(previous.get("status", "error"))
+                    previous_counts[status] = previous_counts.get(status, 0) + 1
 
     detections = _load_detections(args.detections_jsonl)
     teacher = EfficientViTSamTeacher(args)
@@ -262,6 +312,8 @@ def main() -> None:
         "multiple_objects": 0,
         "error": 0,
     }
+    for status, count in previous_counts.items():
+        counts[status] = counts.get(status, 0) + count
 
     with manifest_path.open("a", encoding="utf-8") as manifest:
         for index, source in enumerate(sources, start=1):
@@ -272,7 +324,7 @@ def main() -> None:
             stem = _stem_for(relative)
             record: dict[str, Any] = {"source": relative, "label": label}
             try:
-                if label == args.other_label.lower():
+                if label == args.other_label.lower() and not args.segment_other:
                     destination = (
                         training_root / label / f"{stem}{source.suffix.lower()}"
                     )
@@ -335,35 +387,45 @@ def main() -> None:
                                 (decision.mask * 255).astype(np.uint8)
                             ).save(mask_path)
                             generated: list[str] = []
-                            for variant in range(args.variants):
-                                seed = args.seed + int(stem[-8:], 16) + variant
-                                prepared = composite_masked_object(
-                                    rgb,
-                                    decision.mask,
-                                    output_size=args.output_size,
-                                    rng=np.random.default_rng(seed),
-                                    variant=variant,
-                                )
-                                destination = (
-                                    training_root / label / f"{stem}_seg{variant}.jpg"
-                                )
-                                destination.parent.mkdir(parents=True, exist_ok=True)
-                                Image.fromarray(prepared).save(destination, quality=94)
-                                generated.append(
-                                    destination.relative_to(output).as_posix()
-                                )
+                            if not args.mask_only:
+                                for variant in range(args.variants):
+                                    seed = args.seed + int(stem[-8:], 16) + variant
+                                    prepared = composite_masked_object(
+                                        rgb,
+                                        decision.mask,
+                                        output_size=args.output_size,
+                                        rng=np.random.default_rng(seed),
+                                        variant=variant,
+                                    )
+                                    destination = (
+                                        training_root
+                                        / label
+                                        / f"{stem}_seg{variant}.jpg"
+                                    )
+                                    destination.parent.mkdir(
+                                        parents=True, exist_ok=True
+                                    )
+                                    Image.fromarray(prepared).save(
+                                        destination, quality=94
+                                    )
+                                    generated.append(
+                                        destination.relative_to(output).as_posix()
+                                    )
                             record.update(
                                 status="accepted",
-                                supported=True,
+                                supported=label != args.other_label.lower(),
                                 object_present=True,
                                 mask=mask_path.relative_to(output).as_posix(),
+                                mask_confidence=decision.mask_confidence,
                                 bbox_xyxy=list(decision.bbox_xyxy),
                                 mask_candidates=decision.candidate_count,
                                 distinct_objects=decision.distinct_object_count,
                                 detector_objects=len(detected),
                                 outputs=generated,
                             )
-            except (OSError, ValueError, UnidentifiedImageError) as exc:
+            # A corrupt or abnormally large image must not terminate an overnight
+            # dataset run. KeyboardInterrupt is a BaseException and remains safe.
+            except Exception as exc:  # noqa: BLE001
                 record.update(status="error", supported=False, error=str(exc))
             counts[record["status"]] = counts.get(record["status"], 0) + 1
             manifest.write(json.dumps(record) + "\n")
@@ -377,6 +439,8 @@ def main() -> None:
         "training_data": str(training_root),
         "model": args.model,
         "device": teacher.device,
+        "prompt_mode": args.prompt_mode,
+        "mask_only": args.mask_only,
         "variants": args.variants,
         "counts": counts,
         "note": "Review rejected masks before training; source images were not modified.",

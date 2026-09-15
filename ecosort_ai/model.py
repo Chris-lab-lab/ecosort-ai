@@ -76,9 +76,13 @@ def _read_open_set_metadata(path: Path | None) -> dict[str, Any]:
 def find_ethosu_delegate() -> str | None:
     """Locate the delegate across common NXP BSP library layouts."""
 
-    candidates = ["/usr/lib/libethosu_delegate.so"]
-    candidates.extend(sorted(glob.glob("/usr/lib*/libethosu_delegate.so*")))
-    return next((path for path in dict.fromkeys(candidates) if os.path.isfile(path)), None)
+    names = ("libethosu_delegate.so", "liblitert_ethosu_delegate.so")
+    candidates = [f"/usr/lib/{name}" for name in names]
+    for name in names:
+        candidates.extend(sorted(glob.glob(f"/usr/lib*/{name}*")))
+    return next(
+        (path for path in dict.fromkeys(candidates) if os.path.isfile(path)), None
+    )
 
 
 class WasteClassifier:

@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 dataset/
 dataset_enhanced/
+dataset_new/
 dataset_segmented*/
 external/
 data/*/*.jpg

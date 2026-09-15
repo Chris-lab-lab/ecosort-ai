@@ -16,6 +16,7 @@ class MaskDecision:
     bbox_xyxy: tuple[int, int, int, int] | None
     candidate_count: int
     distinct_object_count: int
+    mask_confidence: float = 0.0
 
 
 def _mask_iou(left: np.ndarray, right: np.ndarray) -> float:
@@ -66,7 +67,7 @@ def select_primary_mask(
 
     center_top, center_bottom = int(height * 0.35), max(1, int(height * 0.65))
     center_left, center_right = int(width * 0.35), max(1, int(width * 0.65))
-    candidates: list[tuple[float, bool, np.ndarray]] = []
+    candidates: list[tuple[float, bool, np.ndarray, float]] = []
     for item in raw_masks:
         mask = np.asarray(item.get("segmentation"), dtype=bool)
         if mask.shape != (height, width):
@@ -79,10 +80,18 @@ def select_primary_mask(
         )
         stability = float(item.get("stability_score", 0.0))
         predicted_iou = float(item.get("predicted_iou", 0.0))
+        mask_confidence = float(
+            np.clip((stability + predicted_iou) / 2.0, 0.0, 1.0)
+        )
         central_bonus = 2.0 if center_hit else 0.0
         size_score = 1.0 - abs(area_ratio - 0.30)
         candidates.append(
-            (central_bonus + size_score + stability + predicted_iou, center_hit, mask)
+            (
+                central_bonus + size_score + stability + predicted_iou,
+                center_hit,
+                mask,
+                mask_confidence,
+            )
         )
 
     if not candidates:
@@ -91,13 +100,22 @@ def select_primary_mask(
     central_candidates = [item for item in candidates if item[1]]
     if require_center and not central_candidates:
         return MaskDecision("no_object", None, None, len(candidates), 0)
-    primary = (central_candidates[0] if require_center else candidates[0])[2]
+    primary_item = central_candidates[0] if require_center else candidates[0]
+    primary = primary_item[2]
+    mask_confidence = primary_item[3]
     if not reject_multiple_objects:
-        return MaskDecision("accepted", primary, _bbox(primary), len(candidates), 1)
+        return MaskDecision(
+            "accepted",
+            primary,
+            _bbox(primary),
+            len(candidates),
+            1,
+            mask_confidence,
+        )
 
     primary_area = int(primary.sum())
     distinct = [primary]
-    for _, _, candidate in candidates:
+    for _, _, candidate, _ in candidates:
         if candidate is primary:
             continue
         if int(candidate.sum()) < primary_area * multiple_object_ratio:
@@ -113,9 +131,21 @@ def select_primary_mask(
 
     if len(distinct) > 1:
         return MaskDecision(
-            "multiple_objects", None, None, len(candidates), len(distinct)
+            "multiple_objects",
+            None,
+            None,
+            len(candidates),
+            len(distinct),
+            mask_confidence,
         )
-    return MaskDecision("accepted", primary, _bbox(primary), len(candidates), 1)
+    return MaskDecision(
+        "accepted",
+        primary,
+        _bbox(primary),
+        len(candidates),
+        1,
+        mask_confidence,
+    )
 
 
 def synthetic_background(
