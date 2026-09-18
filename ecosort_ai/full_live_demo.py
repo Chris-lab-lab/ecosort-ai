@@ -16,6 +16,7 @@ import numpy as np
 
 from .full_model import FullWasteModel
 from .held_object import HeldObjectWorkerClient
+from .mask_refinement import refine_binary_mask, smooth_mask_probability
 
 
 def arguments() -> argparse.Namespace:
@@ -35,6 +36,17 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--frames", type=int, default=5)
     parser.add_argument("--roi-scale", type=float, default=0.68)
     parser.add_argument("--mask-threshold", type=float, default=0.50)
+    parser.add_argument(
+        "--raw-mask",
+        action="store_true",
+        help="show the unfiltered student mask (useful for model debugging)",
+    )
+    parser.add_argument(
+        "--mask-smoothing",
+        type=float,
+        default=0.72,
+        help="weight of the current frame in temporal mask smoothing (0..1)",
+    )
     parser.add_argument("--material-threshold", type=float)
     parser.add_argument("--validity-threshold", type=float)
     parser.add_argument(
@@ -82,6 +94,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--roi-scale must be between 0.2 and 1.0")
     if not 0.0 < args.mask_threshold < 1.0:
         parser.error("--mask-threshold must be between 0 and 1")
+    if not 0.0 <= args.mask_smoothing <= 1.0:
+        parser.error("--mask-smoothing must be between 0 and 1")
     if not 0.0 < args.detector_threshold < 1.0:
         parser.error("--detector-threshold must be between 0 and 1")
     if args.wrist_distance_ratio <= 0:
@@ -176,6 +190,7 @@ def run(args: argparse.Namespace) -> None:
 
     score_history: deque[np.ndarray] = deque(maxlen=args.frames)
     validity_history: deque[float] = deque(maxlen=args.frames)
+    previous_mask_probability: np.ndarray | None = None
     previous = time.perf_counter()
     fps = 0.0
     print(model.describe())
@@ -247,6 +262,7 @@ def run(args: argparse.Namespace) -> None:
                         # earlier camera crops; each SAM outline is current-frame.
                         score_history.clear()
                         validity_history.clear()
+                        previous_mask_probability = None
                     else:
                         selected = np.zeros((height, width), dtype=bool)
                         region = frame
@@ -255,6 +271,7 @@ def run(args: argparse.Namespace) -> None:
                         object_note = f"No held item: {selection.reason}"
                         score_history.clear()
                         validity_history.clear()
+                        previous_mask_probability = None
                 else:
                     region = frame[top:bottom, left:right]
                     prediction = model.predict_rgb(
@@ -265,10 +282,28 @@ def run(args: argparse.Namespace) -> None:
                         (side, side),
                         interpolation=cv2.INTER_LINEAR,
                     )
-                    selected = mask >= args.mask_threshold
+                    mask = smooth_mask_probability(
+                        mask,
+                        previous_mask_probability,
+                        current_weight=args.mask_smoothing,
+                    )
+                    previous_mask_probability = mask
+                    selected = (
+                        mask >= args.mask_threshold
+                        if args.raw_mask
+                        else refine_binary_mask(
+                            cv2,
+                            mask,
+                            threshold=args.mask_threshold,
+                        )
+                    )
                     origin = (left, top)
                     rectangle = (left, top, right, bottom)
-                    object_note = "INT8 student mask"
+                    object_note = (
+                        "INT8 raw student mask"
+                        if args.raw_mask
+                        else "INT8 student mask + NXP-safe cleanup"
+                    )
 
                 if prediction is not None:
                     score_history.append(

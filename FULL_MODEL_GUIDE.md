@@ -7,13 +7,18 @@ artifacts_v3 models. It produces one compact model with four outputs:
 224x224 RGB
     |
 MobileNetV2 0.35 shared encoder
-    |-- 56x56 object mask
-    |-- general/paper, metal, plastic
+    |-- early spatial features ---------|
+    |-- deep semantic features -> LR-ASPP-style fusion -> 112x112 object mask
+    |                                                   |
+    |                         foreground-gated classifier
+    |-- general/paper, metal, plastic <-----------------|
     |-- supported/reject probability
     +-- 64-value embedding
 ~~~
 
-EfficientViT-SAM is an offline mask teacher only. The exported model does not
+The v2 decoder combines detailed early features with deep whole-object context;
+the route classifier is weighted by the predicted foreground rather than reading
+the complete background equally. EfficientViT-SAM is an offline mask teacher only. The exported model does not
 contain SAM, PyTorch, CUDA, Depth Anything, or GazeSAM. The i.MX93 receives RGB
 and runs only the INT8 MobileNet student.
 
@@ -38,8 +43,10 @@ Use a new output folder and segment every class, including other:
 ~~~
 
 This fast command assumes one presented object crosses the center of each
-image. Use --prompt-mode auto instead when objects are not centered; automatic
-mode is more thorough but much slower. This step runs on the laptop GPU. Stop
+image. Center-point masks must be reviewed because labels, transparent regions,
+and reflections can be selected instead of the whole silhouette. Prefer a
+verified detector box prompt for new data. Use --prompt-mode auto when objects
+are not centered; automatic mode is more thorough but much slower. This step runs on the laptop GPU. Stop
 it safely with Ctrl+C and use the same command with --resume to continue. Inspect:
 
 ~~~text
@@ -61,15 +68,15 @@ TensorFlow on this Windows environment currently trains on CPU. The SAM teacher
 uses the NVIDIA GPU, but the compact TensorFlow student does not.
 
 ~~~powershell
-.\.venv\Scripts\python.exe train_full_model.py --manifest dataset_segmented_full\segmentation_manifest.jsonl --output artifacts_full --epochs 15 --fine-tune-epochs 5 --batch-size 32
+.\.venv\Scripts\python.exe train_full_model.py --manifest dataset_segmented_full\segmentation_manifest.jsonl --output artifacts_full_v2 --epochs 15 --fine-tune-epochs 5 --batch-size 32
 ~~~
 
 The deployable result is:
 
 ~~~text
-artifacts_full\full_waste_model_int8.tflite
-artifacts_full\labels.txt
-artifacts_full\full_model.json
+artifacts_full_v2\full_waste_model_int8.tflite
+artifacts_full_v2\labels.txt
+artifacts_full_v2\full_model.json
 ~~~
 
 The trainer refuses an incomplete class set and refuses to overwrite a nonempty
@@ -81,7 +88,7 @@ This viewer is visual dry-run only. It can show the isolated item against white
 or as a green overlay:
 
 ~~~powershell
-.\.venv\Scripts\python.exe -m ecosort_ai.full_live_demo --model artifacts_full\full_waste_model_int8.tflite --labels artifacts_full\labels.txt --camera 0 --view white
+.\.venv\Scripts\python.exe -m ecosort_ai.full_live_demo --model artifacts_full_v2\full_waste_model_int8.tflite --labels artifacts_full_v2\labels.txt --metadata artifacts_full_v2\full_model.json --camera 0 --view white
 ~~~
 
 Press V to switch view and Q or Escape to quit.
@@ -112,7 +119,7 @@ Do not use the earlier `segmentation_manifest_mapped.jsonl` for this taxonomy.
 Run from the project root on your laptop:
 
 ~~~powershell
-.\.venv\Scripts\python.exe train_full_model.py --manifest dataset_segmented_new_raw\segmentation_manifest.jsonl --taxonomy disposal --skip-unsupported-images --output artifacts_disposal_new --epochs 15 --fine-tune-epochs 5 --batch-size 32
+.\.venv\Scripts\python.exe train_full_model.py --manifest dataset_segmented_new_raw\segmentation_manifest.jsonl --taxonomy disposal --skip-unsupported-images --output artifacts_disposal_mask_v2 --epochs 15 --fine-tune-epochs 5 --batch-size 32
 ~~~
 
 The skip option excludes the 13 WEBP and one MPO image whose `.jpg` extension
@@ -120,7 +127,7 @@ misrepresents their actual format; it does not modify the source files. Preview
 the resulting RGB + mask + disposal-category model with:
 
 ~~~powershell
-.\.venv\Scripts\python.exe -m ecosort_ai.full_live_demo --model artifacts_disposal_new\full_waste_model_int8.tflite --labels artifacts_disposal_new\labels.txt --camera 0 --view overlay --delegate none
+.\.venv\Scripts\python.exe -m ecosort_ai.full_live_demo --model artifacts_disposal_mask_v2\full_waste_model_int8.tflite --labels artifacts_disposal_mask_v2\labels.txt --metadata artifacts_disposal_mask_v2\full_model.json --camera 0 --view overlay --delegate none
 ~~~
 
 This taxonomy has no separate unknown/reject examples. Its validity head is

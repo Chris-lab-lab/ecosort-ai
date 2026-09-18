@@ -304,6 +304,7 @@ def make_dataset(
     material_labels: list[str],
     *,
     image_size: int,
+    mask_size: int,
     batch_size: int,
     augment: bool,
     seed: int,
@@ -365,7 +366,7 @@ def make_dataset(
             value.set_shape([None, None, 1])
             return tf.image.resize(
                 tf.cast(value, tf.float32) / 255.0,
-                [image_size // 4, image_size // 4],
+                [mask_size, mask_size],
                 method="nearest",
             )
 
@@ -373,7 +374,7 @@ def make_dataset(
             tf.strings.length(mask_path) > 0,
             read_mask,
             lambda: tf.zeros(
-                [image_size // 4, image_size // 4, 1], dtype=tf.float32
+                [mask_size, mask_size, 1], dtype=tf.float32
             ),
         )
         if augment:
@@ -421,6 +422,14 @@ def build_models(
     material_count: int,
     weights: str | None,
 ) -> tuple[Any, Any, Any]:
+    """Build an NPU-friendly LR-ASPP-inspired multi-task student.
+
+    The old mask head used only an early MobileNet feature map, so it could
+    reproduce local texture without understanding the complete object. This
+    decoder combines that high-resolution map with the final semantic feature
+    map and predicts at half the input resolution. The resulting mask also
+    gates classification features, making the route head focus on foreground.
+    """
     base = tf.keras.applications.MobileNetV2(
         input_shape=(image_size, image_size, 3),
         alpha=0.35,
@@ -438,26 +447,75 @@ def build_models(
     normalized = tf.keras.layers.Rescaling(
         1 / 127.5, offset=-1, name="normalize"
     )(inputs)
-    mask_features, final_features = skip_extractor(normalized, training=False)
+    spatial_features, final_features = skip_extractor(normalized, training=False)
+
+    spatial_features = tf.keras.layers.Conv2D(
+        32, 1, padding="same", use_bias=False, name="mask_spatial_projection"
+    )(spatial_features)
+    spatial_features = tf.keras.layers.BatchNormalization(
+        name="mask_spatial_bn"
+    )(spatial_features)
+    spatial_features = tf.keras.layers.ReLU(
+        max_value=6.0, name="mask_spatial_relu"
+    )(spatial_features)
+
+    semantic_features = tf.keras.layers.Conv2D(
+        48, 1, padding="same", use_bias=False, name="mask_semantic_projection"
+    )(final_features)
+    semantic_features = tf.keras.layers.BatchNormalization(
+        name="mask_semantic_bn"
+    )(semantic_features)
+    semantic_features = tf.keras.layers.ReLU(
+        max_value=6.0, name="mask_semantic_relu"
+    )(semantic_features)
+    semantic_features = tf.keras.layers.UpSampling2D(
+        size=(8, 8), interpolation="bilinear", name="mask_semantic_upsample"
+    )(semantic_features)
+
+    mask_features = tf.keras.layers.Concatenate(name="mask_feature_fusion")(
+        [spatial_features, semantic_features]
+    )
     mask_features = tf.keras.layers.DepthwiseConv2D(
-        3, padding="same", use_bias=False, name="mask_depthwise"
+        3, padding="same", use_bias=False, name="mask_fusion_depthwise"
     )(mask_features)
-    mask_features = tf.keras.layers.BatchNormalization(name="mask_bn")(
+    mask_features = tf.keras.layers.BatchNormalization(name="mask_fusion_bn")(
         mask_features
     )
-    mask_features = tf.keras.layers.ReLU(max_value=6.0, name="mask_relu")(
-        mask_features
-    )
+    mask_features = tf.keras.layers.ReLU(
+        max_value=6.0, name="mask_fusion_relu"
+    )(mask_features)
     mask_features = tf.keras.layers.Conv2D(
-        24, 1, activation="relu", name="mask_projection"
+        32, 1, padding="same", use_bias=False, name="mask_fusion_projection"
+    )(mask_features)
+    mask_features = tf.keras.layers.BatchNormalization(name="mask_decoder_bn")(
+        mask_features
+    )
+    mask_features = tf.keras.layers.ReLU(
+        max_value=6.0, name="mask_decoder_relu"
+    )(mask_features)
+    mask_features = tf.keras.layers.UpSampling2D(
+        size=(2, 2), interpolation="bilinear", name="mask_detail_upsample"
     )(mask_features)
     object_mask = tf.keras.layers.Conv2D(
         1, 1, activation="sigmoid", name="object_mask"
     )(mask_features)
 
+    # A 112x112 mask becomes a 7x7 gate for a 224 input. Four stride-2 pools
+    # stay within Ethos-U Vela constraints; one stride-16 pool may fall back to
+    # the CPU. Multiplication makes classification depend on foreground pixels.
+    classification_gate = object_mask
+    for level in range(4):
+        classification_gate = tf.keras.layers.AveragePooling2D(
+            pool_size=(2, 2),
+            strides=(2, 2),
+            name=f"mask_gate_pool_{level + 1}",
+        )(classification_gate)
+    focused_features = tf.keras.layers.Multiply(name="foreground_features")(
+        [final_features, classification_gate]
+    )
     pooled = tf.keras.layers.GlobalAveragePooling2D(
         name="global_features"
-    )(final_features)
+    )(focused_features)
     embedding = tf.keras.layers.Dense(
         embedding_size, activation="relu", name="embedding"
     )(pooled)
@@ -515,6 +573,34 @@ def mask_loss(tf: Any) -> Any:
         return binary + dice + 0.20 * boundary
 
     return loss
+
+
+def mask_iou_metric(tf: Any) -> Any:
+    def iou(y_true: Any, y_pred: Any) -> Any:
+        truth = tf.cast(y_true >= 0.5, tf.float32)
+        predicted = tf.cast(y_pred >= 0.5, tf.float32)
+        intersection = tf.reduce_sum(truth * predicted, axis=[1, 2, 3])
+        union = tf.reduce_sum(
+            tf.cast((truth + predicted) > 0.0, tf.float32), axis=[1, 2, 3]
+        )
+        return tf.reduce_mean((intersection + 1e-6) / (union + 1e-6))
+
+    iou.__name__ = "iou"
+    return iou
+
+
+def mask_dice_metric(tf: Any) -> Any:
+    def dice(y_true: Any, y_pred: Any) -> Any:
+        truth = tf.cast(y_true >= 0.5, tf.float32)
+        predicted = tf.cast(y_pred >= 0.5, tf.float32)
+        intersection = tf.reduce_sum(truth * predicted, axis=[1, 2, 3])
+        denominator = tf.reduce_sum(truth + predicted, axis=[1, 2, 3])
+        return tf.reduce_mean(
+            (2.0 * intersection + 1e-6) / (denominator + 1e-6)
+        )
+
+    dice.__name__ = "dice"
+    return dice
 
 
 def class_weights(
@@ -605,11 +691,13 @@ def main() -> None:
     material_balance, validity_balance = class_weights(
         training_samples, material_labels, args.taxonomy
     )
+    mask_size = args.image_size // 2
     training = make_dataset(
         tf,
         training_samples,
         material_labels,
         image_size=args.image_size,
+        mask_size=mask_size,
         batch_size=args.batch_size,
         augment=True,
         seed=args.seed,
@@ -621,6 +709,7 @@ def main() -> None:
         validation_samples,
         material_labels,
         image_size=args.image_size,
+        mask_size=mask_size,
         batch_size=args.batch_size,
         augment=False,
         seed=args.seed,
@@ -656,6 +745,12 @@ def main() -> None:
                 "validity": args.validity_loss_weight if args.taxonomy == "material" else 0.0,
                 "object_mask": args.mask_loss_weight,
             },
+            metrics={
+                "object_mask": [
+                    mask_iou_metric(tf),
+                    mask_dice_metric(tf),
+                ],
+            },
             weighted_metrics={
                 "material": [
                     tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")
@@ -671,11 +766,15 @@ def main() -> None:
     best_weights = output / "best.weights.h5"
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=4, restore_best_weights=True
+            monitor="val_object_mask_iou",
+            mode="max",
+            patience=4,
+            restore_best_weights=True,
         ),
         tf.keras.callbacks.ModelCheckpoint(
             best_weights,
-            monitor="val_loss",
+            monitor="val_object_mask_iou",
+            mode="max",
             save_best_only=True,
             save_weights_only=True,
         ),
@@ -693,8 +792,12 @@ def main() -> None:
 
     if args.fine_tune_epochs:
         base.trainable = True
-        for layer in base.layers[:-20]:
-            layer.trainable = False
+        fine_tune_from = base.layers.index(base.get_layer("block_3_expand"))
+        for index, layer in enumerate(base.layers):
+            layer.trainable = (
+                index >= fine_tune_from
+                and not isinstance(layer, tf.keras.layers.BatchNormalization)
+            )
         compile_model(1e-5)
         start = len(first.history["loss"])
         second = model.fit(
@@ -717,13 +820,15 @@ def main() -> None:
         "\n".join(material_labels) + "\n", encoding="utf-8"
     )
     metadata = {
-        "model_type": "ecosort_full_multitask_v1",
+        "model_type": "ecosort_full_multitask_v2",
         "taxonomy": args.taxonomy,
-        "architecture": "MobileNetV2-0.35 shared encoder",
+        "architecture": (
+            "MobileNetV2-0.35 + deep/spatial mask fusion + foreground-gated classifier"
+        ),
         "outputs": ["object_mask", "material", "validity", "embedding"],
         "material_labels": material_labels,
         "input_size": args.image_size,
-        "mask_size": args.image_size // 4,
+        "mask_size": mask_size,
         "material_threshold": args.material_threshold,
         "validity_threshold": args.validity_threshold,
         "smoke_test_only": bool(args.smoke_test),
@@ -765,8 +870,8 @@ def main() -> None:
     with Image.open(validation_samples[0].image) as image:
         prediction = runtime.predict_rgb(np.asarray(image.convert("RGB")))
     if prediction.object_mask.shape != (
-        args.image_size // 4,
-        args.image_size // 4,
+        mask_size,
+        mask_size,
     ):
         raise RuntimeError(
             f"Unexpected exported mask shape: {prediction.object_mask.shape}"
