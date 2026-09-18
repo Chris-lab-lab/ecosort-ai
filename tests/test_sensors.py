@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from ecosort_hw.sensors import DigitalInputSensor, DigitalMetalSensor, NumericSensor
+
+
+class DigitalMetalSensorTests(unittest.TestCase):
+    def test_active_high_sensor(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            value = Path(folder) / "value"
+            value.write_text("1\n", encoding="ascii")
+            self.assertTrue(DigitalMetalSensor(value).read())
+            value.write_text("0\n", encoding="ascii")
+            self.assertFalse(DigitalMetalSensor(value).read())
+
+    def test_active_low_sensor(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            value = Path(folder) / "value"
+            value.write_text("0", encoding="ascii")
+            self.assertTrue(DigitalMetalSensor(value, active_low=True).read())
+
+    def test_invalid_sensor_value_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            value = Path(folder) / "value"
+            value.write_text("maybe", encoding="ascii")
+            with self.assertRaisesRegex(ValueError, "expected a digital"):
+                DigitalMetalSensor(value).read()
+
+    def test_generic_digital_input(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            value = Path(folder) / "presence"
+            value.write_text("on\n", encoding="ascii")
+            self.assertTrue(DigitalInputSensor(value).read())
+
+    def test_numeric_sensor(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            value = Path(folder) / "weight"
+            value.write_text("124.5\n", encoding="ascii")
+            self.assertEqual(NumericSensor(value).read(), 124.5)
+
+
+if __name__ == "__main__":
+    unittest.main()

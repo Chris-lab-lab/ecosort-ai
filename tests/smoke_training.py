@@ -72,10 +72,19 @@ def main() -> None:
             delegate=None,
         )
         prediction = classifier.predict_rgb(np.full((128, 128, 3), 100, dtype=np.uint8))
-        assert set(prediction.scores) == set(labels)
+        material_labels = set(labels) - {"other"}
+        assert set(prediction.scores) == material_labels
         assert all(np.isfinite(value) for value in prediction.scores.values())
+        assert prediction.supported_probability is not None
+        assert prediction.prototype_distances is not None
+        assert classifier.supports_unknown_rejection
+        assert classifier.has_validity_output
+        assert set(classifier.material_confidence_thresholds) == material_labels
         assert classifier.input["dtype"] == np.uint8
         assert classifier.output["dtype"] == np.uint8
+        assert summary["model_type"] == "ecosort_v2_open_set"
+        assert set(summary["material_confidence_thresholds"]) == material_labels
+        assert (artifacts / "open_set.json").is_file()
         matrix = summary["quantized_confusion_matrix"]["rows_are_actual_columns_are_predicted"]
         assert sum(sum(row) for row in matrix) == 8
         print("PASS: train -> best checkpoint -> full INT8 export -> validation -> runtime inference")

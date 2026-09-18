@@ -1,11 +1,16 @@
 .venv/
+.teacher-venv/
 .cache/
 __pycache__/
 *.py[cod]
 dataset/
 dataset_enhanced/
+dataset_new/
+dataset_segmented*/
 external/
 data/*/*.jpg
 artifacts*/
 corrections/
 validation_data/
+teacher_outputs/
+teacher_models/

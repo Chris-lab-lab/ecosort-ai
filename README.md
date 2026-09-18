@@ -3,24 +3,27 @@
 This project implements a single-item recycling prototype for the FRDM-i.MX93:
 
 1. A USB camera sees one item inside the on-screen inspection square.
-2. A MobileNetV2 classifier predicts `plastic`, `general` (or `paper`), `metal`, or `other`.
-3. Several predictions are averaged to reduce sensitivity to isolated bad frames.
-4. Confidence, winner-margin, and agreement rules reject weak predictions; an `other` prediction keeps the lids closed.
-5. Linux sends I2C commands to a PCA9685, which moves one 180-degree SG90 lid servo.
+2. An INT8 MobileNetV2 feature extractor feeds a material head (`plastic`, `general`/`paper`, `metal`) and a supported-item validity head.
+3. A cosine-distance check rejects images outside the feature space learned for the three routed materials.
+4. Several predictions are averaged; confidence, margin, validity, feature distance, frame agreement, and an optional metal sensor must all agree.
+5. Rejected/unknown items keep every lid closed. Accepted items are routed through Linux I2C to a PCA9685 and one 180-degree SG90 lid servo.
 
 There is no trained model file in this folder yet. The supplied pictures show the actuators, not labeled trash examples. Run the camera collector with your real trash, then run `train.py`; it exports an INT8 model ready for Vela and the i.MX93 Ethos-U65.
 
 For the selected first demo: **plastic bottles -> Plastic**, **wrappers -> General**, **metal cans -> Metal**. The `other` class covers empty scenes and unsupported objects. These are visual categories learned from your examples; confidence thresholds alone cannot guarantee rejection of every unfamiliar item.
 
 Windows users can begin with [START_HERE.md](START_HERE.md): double-click `OPEN_CAMERA.cmd`, collect labeled photos, then use `RUN_TRAINING.cmd` and `RUN_DEMO.cmd`.
+The complete training and live inference charts are in [AI_ARCHITECTURE.md](AI_ARCHITECTURE.md).
+Laptop-only segmentation, YOLO-World review, and background-bias audit instructions are in [OFFLINE_TEACHERS.md](OFFLINE_TEACHERS.md).
 
 ```mermaid
 flowchart LR
     CAM[USB camera] --> ROI[Centered single-item ROI]
     ROI --> AI[INT8 MobileNetV2<br/>Ethos-U65 or CPU]
-    AI --> AVG[Average 5-7 predictions]
-    AVG --> RULES{Confidence + margin<br/>+ frame agreement}
-    RULES -->|uncertain / other| CLOSED[Keep every lid closed]
+    AI --> HEADS[Material + validity<br/>+ feature embedding]
+    HEADS --> AVG[Average 5-7 predictions]
+    AVG --> RULES{Confidence + margin + agreement<br/>validity + prototype distance<br/>optional metal sensor}
+    RULES -->|any check fails| CLOSED[Keep every lid closed]
     RULES -->|accepted class| I2C[A55 Linux I2C]
     I2C --> PWM[PCA9685 PWM]
     PWM --> S0[CH0 Plastic SG90]
@@ -88,7 +91,7 @@ dataset using hard links when the filesystem supports them:
 
 ```powershell
 python scripts\import_taco.py
-python train.py --data dataset_enhanced --output artifacts
+python train.py --data dataset_enhanced --output artifacts_v2
 ```
 
 The generated `dataset_enhanced/taco_import_report.json` records the category mapping and
@@ -96,17 +99,30 @@ counts; `taco_import_manifest.jsonl` records the source URL and license ID for e
 The mapping deliberately sends glass, batteries, and ambiguous composite items to `other`, and
 omits TACO's `Unlabeled litter` category rather than assigning an unreliable material label.
 
-The trainer uses ImageNet transfer learning, reproducible train/validation partitions, augmentation, fine-tuning, full INT8 quantization, and a second accuracy check on the exported TFLite file. Outputs:
+When an `other` folder is present, the trainer now builds EcoSort V2 by default. `other` trains a binary validity head instead of competing with the material classes. The trainer calibrates a validity threshold from validation data and records per-material feature prototypes and cosine-distance limits. Use `--legacy-single-head` only to reproduce the older four-class model.
+
+The trainer uses ImageNet transfer learning, reproducible train/validation partitions, augmentation, fine-tuning, class balancing, full INT8 quantization, and a second evaluation of the exported TFLite file. Outputs:
 
 ```text
 artifacts/best.keras
 artifacts/labels.txt
+artifacts/open_set.json
 artifacts/saved_model/
 artifacts/waste_classifier_int8.tflite
 artifacts/training_summary.json
 ```
 
-`training_summary.json` reports float accuracy, quantized accuracy, and a class-by-class confusion matrix. If validation accuracy is weak, collect more varied examples and inspect mistakes; do not lower the safety threshold just to make the demo trigger.
+`labels.txt` contains only the three routed material labels for a V2 model. `open_set.json` contains the calibrated reject threshold and feature prototypes and must travel with the model. `training_summary.json` reports the confusion matrix, per-class precision/recall/F1, macro F1, unknown false-acceptance rate, and wrong-lid activation rate. If results are weak, collect more varied examples and inspect mistakes; do not lower safety thresholds just to make the demo trigger.
+
+To retrain the enhanced dataset without overwriting the older artifact until you have tested it:
+
+```powershell
+.\.venv\Scripts\python.exe train.py `
+  --data dataset_enhanced `
+  --output artifacts_v2 `
+  --epochs 15 `
+  --fine-tune-epochs 5
+```
 
 ## Camera demo on the laptop
 
@@ -124,8 +140,8 @@ Press Space to classify and Q to quit. For the polished multi-frame demo, run:
 
 ```powershell
 python -m ecosort_ai.live_demo `
-  --model artifacts\waste_classifier_int8.tflite `
-  --labels artifacts\labels.txt `
+  --model artifacts_v2\waste_classifier_int8.tflite `
+  --labels artifacts_v2\labels.txt `
   --camera 0 `
   --frames 7 `
   --threshold 0.75 `
@@ -133,7 +149,37 @@ python -m ecosort_ai.live_demo `
   --dry-run
 ```
 
-It displays the inspection ROI, averaged class confidence, frame agreement, route/rejection state, and runtime/delegate. Space analyzes manually; `A` arms one automatic analysis; `P/G/M/O` saves the current ROI under `corrections/` for later review and retraining; Q/Escape quits. Auto pauses after every result so one item cannot repeatedly command the servos. It stays in dry-run unless `--live --i2c-bus BUS_NUMBER` is explicitly supplied.
+The V2 metadata is auto-detected when `open_set.json` is beside the model. The overlay displays material confidence, supported probability, feature distance, frame agreement, route/rejection state, and runtime/delegate. Space analyzes manually; `A` arms one automatic analysis; `P/G/M/O` saves the current ROI under `corrections/` for later review and retraining; Q/Escape quits. Auto pauses after every result so one item cannot repeatedly command the servos. It stays in dry-run unless `--live --i2c-bus BUS_NUMBER` is explicitly supplied.
+
+### Laptop-only held-object mode
+
+The optional held-object mode follows the useful part of GazeSAM without requiring the user to look at the item. A GPU worker detects COCO objects and body-pose wrist keypoints, chooses the non-person object nearest a visible wrist (or the object centered in the presentation square when no wrist is visible), and uses its box to prompt EfficientViT-SAM. The isolated crop is then classified by the existing TFLite material model. A visible hand is displayed but always prevents physical lid actuation.
+
+Keep PyTorch isolated in `.teacher-venv`, install the optional detector there, and use the already-downloaded EfficientViT-SAM-L0 checkpoint:
+
+```powershell
+.\.teacher-venv\Scripts\python.exe -m pip install -r requirements-held-object.txt
+```
+
+Then launch the normal TensorFlow demo with the GPU worker enabled:
+
+```powershell
+.\.venv\Scripts\python.exe -m ecosort_ai.live_demo `
+  --model artifacts_v2\waste_classifier_int8.tflite `
+  --labels artifacts_v2\labels.txt `
+  --camera 0 `
+  --frames 5 `
+  --held-object `
+  --dry-run
+```
+
+The first run downloads `yolov8n.pt` and `yolov8n-pose.pt` into ignored `teacher_models/`. The overlay shows the detector label, bounding box, EfficientViT mask, and material result. Use `--require-wrist` to disable the center-square fallback. Use `--object-model PATH` and `--pose-model PATH` to supply compatible custom Ultralytics checkpoints. The stock COCO detector recognizes only its 80 categories; train a TACO-derived detector later for waste-specific object names.
+
+This feature is intentionally laptop-only. It starts a persistent `.teacher-venv` worker instead of installing PyTorch in the TensorFlow environment. Ultralytics and its pretrained models have their own licensing terms; review them before redistribution or commercial use.
+
+If the board exposes an already-configured digital metal detector as a readable value file, add `--metal-sensor-path /sys/class/gpio/gpioN/value`. Add `--metal-sensor-active-low` when electrical low means detected. The demo only reads this input; GPIO direction, pin mux, voltage compatibility, and pull resistors must be configured safely in the BSP/device tree first. A camera/sensor disagreement closes all lids.
+
+An optional presence input can be added with `--presence-sensor-path PATH`; a false reading rejects the item. An optional numeric weight input requires all three arguments `--weight-sensor-path PATH --weight-min MIN --weight-max MAX`; values outside the configured safe range reject the item. Sensor files must already be configured and readable by the BSP.
 
 For a saved photo:
 
@@ -228,6 +274,7 @@ export DISPLAY=:0
 python3 -m ecosort_ai.live_demo \
   --model artifacts/vela/waste_classifier_int8_vela.tflite \
   --labels artifacts/labels.txt \
+  --metadata artifacts/open_set.json \
   --camera 0 \
   --frames 7 \
   --threshold 0.75 \

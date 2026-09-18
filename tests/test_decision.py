@@ -27,6 +27,59 @@ class DecisionTests(unittest.TestCase):
                               metal_detected=True)
         self.assertIsNone(result.route)
 
+    def test_validity_head_can_reject_a_confident_material(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            supported_probability=.18,
+            validity_threshold=.6,
+        )
+        self.assertIsNone(result.route)
+        self.assertIn("validity", result.reason)
+
+    def test_distant_feature_embedding_is_rejected(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            supported_probability=.95,
+            prototype_distance=.31,
+            prototype_threshold=.20,
+        )
+        self.assertIsNone(result.route)
+        self.assertIn("feature space", result.reason)
+
+    def test_dual_head_and_feature_checks_accept_known_item(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            supported_probability=.95,
+            prototype_distance=.08,
+            prototype_threshold=.20,
+        )
+        self.assertEqual(result.route, "plastic")
+
+    def test_per_class_threshold_can_be_stricter_than_global_threshold(self):
+        result = decide_route(
+            {"plastic": .82, "general": .10, "metal": .08},
+            confidence_threshold=.75,
+            class_confidence_thresholds={"plastic": .88},
+        )
+        self.assertIsNone(result.route)
+        self.assertIn("plastic threshold", result.reason)
+
+    def test_presence_and_weight_sensors_can_reject(self):
+        scores = {"plastic": .94, "general": .04, "metal": .02}
+        self.assertIsNone(decide_route(scores, object_present=False).route)
+        self.assertIsNone(
+            decide_route(scores, weight_value=650.0, weight_range=(5.0, 500.0)).route
+        )
+
+    def test_visible_hand_prevents_actuation(self):
+        result = decide_route(
+            {"plastic": .94, "general": .04, "metal": .02},
+            hand_present=True,
+        )
+
+        self.assertIsNone(result.route)
+        self.assertIn("hand detected", result.reason)
+
     def test_nan_score_never_routes(self):
         result = decide_route({"plastic": math.nan, "paper": .4, "metal": .3, "other": .3})
         self.assertIsNone(result.route)
