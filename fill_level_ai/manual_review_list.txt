@@ -1,0 +1,15 @@
+# Strict definitions: empty = 0%, half-full = 1-74%, full = 75-100%.
+# These source groups were labeled full but the visible fill boundary is too low or ambiguous.
+# They are excluded from v2 training and copied to manual-review for human confirmation.
+train/full/original_0005.jpg
+train/full/original_0006.jpg
+train/full/original_0007.jpg
+train/full/original_0008.jpg
+train/full/original_0045.jpg
+train/full/original_0046.jpg
+train/full/original_0047.jpg
+train/full/original_0048.jpg
+train/full/original_0063.jpg
+train/full/original_0064.jpg
+train/full/original_0065.jpg
+train/full/original_0066.jpg

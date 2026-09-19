@@ -1,0 +1,15 @@
+train/empty/original_0005.jpg
+train/empty/original_0006.jpg
+train/empty/original_0007.jpg
+train/empty/original_0008.jpg
+train/empty/original_0025.jpg
+train/empty/original_0026.jpg
+train/half-full/original_0031.jpg
+train/full/original_0006.jpg
+validation/full/original_0014.jpg
+validation/full/original_0015.jpg
+validation/full/original_0016.jpg
+test/empty/original_0002.jpg
+test/empty/original_0004.jpg
+test/empty/original_0007.jpg
+test/empty/original_0008.jpg

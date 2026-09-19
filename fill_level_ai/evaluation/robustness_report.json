@@ -1,0 +1,288 @@
+{
+  "test_images": 40,
+  "conditions": [
+    "medium",
+    "close",
+    "far",
+    "angle",
+    "lighting",
+    "background_position",
+    "low_resolution",
+    "blur_noise"
+  ],
+  "confidence_threshold": 0.58,
+  "baseline": {
+    "independent_test": {
+      "accuracy": 0.975,
+      "macro_f1": 0.9676767676767678,
+      "per_class": {
+        "empty": {
+          "precision": 1.0,
+          "recall": 0.875,
+          "f1": 0.9333333333333333,
+          "support": 8
+        },
+        "half-full": {
+          "precision": 0.9411764705882353,
+          "recall": 1.0,
+          "f1": 0.9696969696969697,
+          "support": 16
+        },
+        "full": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 16
+        }
+      },
+      "confusion_matrix": [
+        [
+          7,
+          1,
+          0
+        ],
+        [
+          0,
+          16,
+          0
+        ],
+        [
+          0,
+          0,
+          16
+        ]
+      ],
+      "confusion_matrix_labels": [
+        "empty",
+        "half-full",
+        "full"
+      ],
+      "weighted_f1": 0.9745454545454546
+    },
+    "conditions": {
+      "angle": {
+        "images": 40,
+        "accuracy": 1.0,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 0.975,
+        "uncertain": 0,
+        "mean_confidence": 0.7965729720890522,
+        "mean_inference_ms": 15.735475000474253
+      },
+      "background_position": {
+        "images": 40,
+        "accuracy": 0.775,
+        "raw_accuracy": 0.775,
+        "consistency_with_medium": 0.8,
+        "uncertain": 0,
+        "mean_confidence": 0.7245239600539207,
+        "mean_inference_ms": 15.270157499980996
+      },
+      "blur_noise": {
+        "images": 40,
+        "accuracy": 1.0,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 0.975,
+        "uncertain": 0,
+        "mean_confidence": 0.7440496981143951,
+        "mean_inference_ms": 22.26710750037455
+      },
+      "close": {
+        "images": 40,
+        "accuracy": 1.0,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 0.975,
+        "uncertain": 0,
+        "mean_confidence": 0.783323448896408,
+        "mean_inference_ms": 19.05494999991788
+      },
+      "far": {
+        "images": 40,
+        "accuracy": 0.675,
+        "raw_accuracy": 0.675,
+        "consistency_with_medium": 0.7,
+        "uncertain": 0,
+        "mean_confidence": 0.7032518416643143,
+        "mean_inference_ms": 20.375789999889093
+      },
+      "lighting": {
+        "images": 40,
+        "accuracy": 0.975,
+        "raw_accuracy": 0.975,
+        "consistency_with_medium": 0.95,
+        "uncertain": 0,
+        "mean_confidence": 0.7226291432976722,
+        "mean_inference_ms": 15.86789750144817
+      },
+      "low_resolution": {
+        "images": 40,
+        "accuracy": 0.825,
+        "raw_accuracy": 0.825,
+        "consistency_with_medium": 0.8,
+        "uncertain": 0,
+        "mean_confidence": 0.6577222637832165,
+        "mean_inference_ms": 15.226869999969495
+      },
+      "medium": {
+        "images": 40,
+        "accuracy": 0.975,
+        "raw_accuracy": 0.975,
+        "consistency_with_medium": 1.0,
+        "uncertain": 0,
+        "mean_confidence": 0.7948644094169139,
+        "mean_inference_ms": 23.061787498591002
+      }
+    },
+    "transformed_overall": {
+      "accuracy": 0.8928571428571429,
+      "raw_accuracy": 0.8928571428571429,
+      "consistency": 0.8821428571428571,
+      "uncertain": 0,
+      "images": 280
+    },
+    "average_inference_ms": 18.35750437508068
+  },
+  "improved": {
+    "independent_test": {
+      "accuracy": 1.0,
+      "macro_f1": 1.0,
+      "per_class": {
+        "empty": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 8
+        },
+        "half-full": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 16
+        },
+        "full": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 16
+        }
+      },
+      "confusion_matrix": [
+        [
+          8,
+          0,
+          0
+        ],
+        [
+          0,
+          16,
+          0
+        ],
+        [
+          0,
+          0,
+          16
+        ]
+      ],
+      "confusion_matrix_labels": [
+        "empty",
+        "half-full",
+        "full"
+      ],
+      "weighted_f1": 1.0
+    },
+    "conditions": {
+      "angle": {
+        "images": 40,
+        "accuracy": 1.0,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 1.0,
+        "uncertain": 0,
+        "mean_confidence": 0.9991983234882355,
+        "mean_inference_ms": 27.48107500083279
+      },
+      "background_position": {
+        "images": 40,
+        "accuracy": 1.0,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 1.0,
+        "uncertain": 0,
+        "mean_confidence": 0.991612434387207,
+        "mean_inference_ms": 28.143512500901124
+      },
+      "blur_noise": {
+        "images": 40,
+        "accuracy": 1.0,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 1.0,
+        "uncertain": 0,
+        "mean_confidence": 0.9995932891964913,
+        "mean_inference_ms": 37.64079500215303
+      },
+      "close": {
+        "images": 40,
+        "accuracy": 0.975,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 1.0,
+        "uncertain": 1,
+        "mean_confidence": 0.9885403022170067,
+        "mean_inference_ms": 33.16656750102993
+      },
+      "far": {
+        "images": 40,
+        "accuracy": 0.775,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 1.0,
+        "uncertain": 9,
+        "mean_confidence": 0.9780351385474205,
+        "mean_inference_ms": 29.291812499286607
+      },
+      "lighting": {
+        "images": 40,
+        "accuracy": 0.85,
+        "raw_accuracy": 0.975,
+        "consistency_with_medium": 0.975,
+        "uncertain": 6,
+        "mean_confidence": 0.9695017725229264,
+        "mean_inference_ms": 29.263094998896122
+      },
+      "low_resolution": {
+        "images": 40,
+        "accuracy": 0.8,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 1.0,
+        "uncertain": 8,
+        "mean_confidence": 0.9922891288995743,
+        "mean_inference_ms": 33.01699999938137
+      },
+      "medium": {
+        "images": 40,
+        "accuracy": 1.0,
+        "raw_accuracy": 1.0,
+        "consistency_with_medium": 1.0,
+        "uncertain": 0,
+        "mean_confidence": 0.9995451167225837,
+        "mean_inference_ms": 33.09817000008479
+      }
+    },
+    "transformed_overall": {
+      "accuracy": 0.9142857142857143,
+      "raw_accuracy": 0.9964285714285714,
+      "consistency": 0.9964285714285714,
+      "uncertain": 24,
+      "images": 280
+    },
+    "average_inference_ms": 31.38775343782072
+  },
+  "model_sizes_bytes": {
+    "baseline": 6505980,
+    "improved": 6510297
+  },
+  "examples_saved": {
+    "correct": 4,
+    "uncertain": 4
+  },
+  "limitations": [
+    "Controlled transformations simulate distance and capture changes but are not a substitute for a new physical recording session.",
+    "The current source data still contains strong correlations between bin appearance and class."
+  ]
+}

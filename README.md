@@ -16,6 +16,10 @@ Windows users can begin with [START_HERE.md](START_HERE.md): double-click `OPEN_
 The complete training and live inference charts are in [AI_ARCHITECTURE.md](AI_ARCHITECTURE.md).
 Laptop-only segmentation, YOLO-World review, and background-bias audit instructions are in [OFFLINE_TEACHERS.md](OFFLINE_TEACHERS.md).
 
+## Bin fill-level AI
+
+The repository also includes a separate trained camera classifier for bin fill level under [`fill_level_ai/`](fill_level_ai/README.md). It returns exactly `empty`, `half-full`, or `full` and includes webcam inference, training, audit, robustness evaluation, and ONNX export files. This component measures bin occupancy state; it is separate from the material-routing model described below.
+
 ```mermaid
 flowchart LR
     CAM[USB camera] --> ROI[Centered single-item ROI]

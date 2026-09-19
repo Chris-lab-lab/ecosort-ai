@@ -14,3 +14,7 @@ corrections/
 validation_data/
 teacher_outputs/
 teacher_models/
+fill_level_ai/data/
+fill_level_ai/.packages/
+fill_level_ai/folder_predictions.csv
+fill_level_ai/*.zip

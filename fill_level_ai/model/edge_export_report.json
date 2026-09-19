@@ -1,0 +1,19 @@
+{
+  "onnx": {
+    "path": "C:\\Users\\David Dharma Chen\\Documents\\Codex\\2026-09-19\\if-x20\\outputs\\waste-bin-ai\\model\\waste_bin_robust_v2.onnx",
+    "bytes": 6096230,
+    "checker_passed": true,
+    "opset": 17
+  },
+  "dynamic_int8_torchscript": {
+    "path": "C:\\Users\\David Dharma Chen\\Documents\\Codex\\2026-09-19\\if-x20\\outputs\\waste-bin-ai\\model\\waste_bin_robust_v2_dynamic_int8.torchscript.pt",
+    "bytes": 4759031
+  },
+  "float_checkpoint_bytes": 6217551,
+  "parameter_count": 1520931,
+  "cpu_single_view_inference_ms": {
+    "float": 20.217262500045763,
+    "dynamic_int8": 20.900218749920896
+  },
+  "deployment_note": "For the i.MX93 Ethos-U65 NPU, use the ONNX model as an interchange artifact, then perform full-integer post-training quantization with representative camera frames, convert to fully quantized TFLite with NXP eIQ, and compile it with the Arm Vela flow. Dynamic TorchScript INT8 is a CPU reference, not an Ethos-U65 artifact."
+}
