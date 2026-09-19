@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import contextlib
 import io
 
@@ -202,6 +202,31 @@ class ConsensusTests(unittest.TestCase):
 
         self.assertEqual(deadline, 104.0)
         self.assertEqual(lids.calls, [("open_timed", "plastic", 4.0)])
+
+    def test_accepted_decision_is_published_to_edge_state(self) -> None:
+        lids = FakeLids()
+        edge_state = SimpleNamespace(record_disposal=Mock())
+        result = AnalysisResult(
+            scores={"plastic": 0.94, "general": 0.03, "metal": 0.02, "other": 0.01},
+            decision=Decision("plastic", 0.94, 0.91, "plastic", "accepted"),
+            frame_count=7,
+            agreement=1.0,
+            detected_object="PET Bottle",
+        )
+
+        _apply_decision(
+            lids,
+            result,
+            hold_open=0,
+            dry_run=True,
+            edge_state=edge_state,
+        )
+
+        edge_state.record_disposal.assert_called_once_with(
+            route="plastic",
+            confidence=0.94,
+            detected_object="PET Bottle",
+        )
 
     def test_nonfinite_cli_timing_is_rejected(self) -> None:
         for option in ("--hold-open", "--auto-interval"):

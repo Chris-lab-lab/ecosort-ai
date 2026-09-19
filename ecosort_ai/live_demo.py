@@ -246,6 +246,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON file with per-lid PCA9685 channels and calibrated pulses",
     )
     parser.add_argument(
+        "--edge-api",
+        action="store_true",
+        help="publish classifications and bin state to the EcoSort mobile app",
+    )
+    parser.add_argument("--edge-host", default="0.0.0.0")
+    parser.add_argument("--edge-port", type=int, default=8080)
+    parser.add_argument(
+        "--depth-i2c-bus",
+        type=int,
+        help="Linux I2C bus containing the single GY-530/VL53L0X",
+    )
+    parser.add_argument(
+        "--depth-i2c-address",
+        type=lambda value: int(value, 0),
+        default=0x29,
+    )
+    parser.add_argument(
+        "--depth-bin",
+        choices=("plastic", "metal", "general"),
+        default="plastic",
+        help="physical bin monitored by the single depth sensor",
+    )
+    parser.add_argument("--empty-depth-cm", type=float, default=40.0)
+    parser.add_argument("--depth-poll-seconds", type=float, default=1.0)
+    parser.add_argument(
         "--metal-sensor-path",
         type=Path,
         help="read an already-configured digital metal sensor value file on Linux",
@@ -356,6 +381,18 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--wrist-distance-ratio must be between 0 and 1")
     if args.i2c_bus is not None and args.i2c_bus < 0:
         parser.error("--i2c-bus must be zero or greater")
+    if not 0 <= args.edge_port <= 65535:
+        parser.error("--edge-port must be between 0 and 65535")
+    if args.depth_i2c_bus is not None and args.depth_i2c_bus < 0:
+        parser.error("--depth-i2c-bus must be zero or greater")
+    if not 0x08 <= args.depth_i2c_address <= 0x77:
+        parser.error("--depth-i2c-address must be a valid 7-bit address")
+    if not math.isfinite(args.empty_depth_cm) or args.empty_depth_cm <= 0:
+        parser.error("--empty-depth-cm must be a positive finite number")
+    if not math.isfinite(args.depth_poll_seconds) or args.depth_poll_seconds <= 0:
+        parser.error("--depth-poll-seconds must be a positive finite number")
+    if args.depth_i2c_bus is not None and not args.edge_api:
+        parser.error("--depth-i2c-bus requires --edge-api")
     weight_options = (
         args.weight_sensor_path is not None,
         args.weight_min is not None,
@@ -648,6 +685,7 @@ def _apply_decision(
     *,
     hold_open: float,
     dry_run: bool,
+    edge_state: Any | None = None,
 ) -> float | None:
     """Actuate a safe route and return its display-only close deadline.
 
@@ -661,9 +699,21 @@ def _apply_decision(
         return None
     if dry_run:
         lids.open_temporarily(route, seconds=0)
-        return None
-    lids.open_timed(route, hold_open)
-    return time.monotonic() + hold_open
+        deadline = None
+    else:
+        lids.open_timed(route, hold_open)
+        deadline = time.monotonic() + hold_open
+
+    if edge_state is not None:
+        try:
+            edge_state.record_disposal(
+                route=route,
+                confidence=result.decision.confidence,
+                detected_object=result.detected_object,
+            )
+        except Exception as exc:
+            print(f"WARNING: could not publish accepted classification: {exc}")
+    return deadline
 
 
 def run(args: argparse.Namespace) -> None:
@@ -743,6 +793,45 @@ def run(args: argparse.Namespace) -> None:
     weight_range = (
         (args.weight_min, args.weight_max) if weight_sensor is not None else None
     )
+
+    edge_state = None
+    edge_server = None
+    depth_monitor = None
+    if args.edge_api:
+        from ecosort_edge import DepthSensorMonitor, EdgeApiServer, EdgeStateStore
+        from ecosort_hw.sensors import VL53L0XDistanceSensor
+
+        edge_state = EdgeStateStore(
+            monitored_bin=args.depth_bin,
+            empty_depth_cm=args.empty_depth_cm,
+        )
+        edge_server = EdgeApiServer(
+            edge_state,
+            host=args.edge_host,
+            port=args.edge_port,
+        ).start()
+        print(
+            f"EcoSort API listening on http://{args.edge_host}:{edge_server.port} "
+            f"(monitored bin: {args.depth_bin})"
+        )
+        if args.depth_i2c_bus is not None:
+            try:
+                depth_sensor = VL53L0XDistanceSensor(
+                    args.depth_i2c_bus,
+                    address=args.depth_i2c_address,
+                )
+                depth_monitor = DepthSensorMonitor(
+                    depth_sensor,
+                    edge_state,
+                    poll_seconds=args.depth_poll_seconds,
+                ).start()
+                print(
+                    f"VL53L0X polling /dev/i2c-{args.depth_i2c_bus} "
+                    f"at 0x{args.depth_i2c_address:02x}"
+                )
+            except Exception as exc:
+                edge_state.mark_sensor_offline(str(exc))
+                print(f"WARNING: depth sensor unavailable; API remains online: {exc}")
 
     hand_buffer: deque[bool] = deque(maxlen=args.average_frames)
     latest_selection: HeldObjectSelection | None = None
@@ -877,6 +966,7 @@ def run(args: argparse.Namespace) -> None:
                                     last_result,
                                     hold_open=args.hold_open,
                                     dry_run=args.dry_run,
+                                    edge_state=edge_state,
                                 )
                                 active_route = (
                                     last_result.decision.route
@@ -951,6 +1041,7 @@ def run(args: argparse.Namespace) -> None:
                                     last_result,
                                     hold_open=args.hold_open,
                                     dry_run=args.dry_run,
+                                    edge_state=edge_state,
                                 )
                                 active_route = (
                                     last_result.decision.route
@@ -992,6 +1083,10 @@ def run(args: argparse.Namespace) -> None:
                                 print(status)
                 finally:
                     cv2.destroyAllWindows()
+                    if depth_monitor is not None:
+                        depth_monitor.stop()
+                    if edge_server is not None:
+                        edge_server.stop()
 
 
 def main() -> None:

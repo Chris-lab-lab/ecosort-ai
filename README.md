@@ -202,10 +202,15 @@ The PCA9685 board is only the pulse generator. It does not provide servo power. 
 Conceptual wiring (confirm the current board revision and header orientation first):
 
 ```text
-FRDM P12 pin 1, 3.3 V   -> PCA9685 VCC (logic and breakout pull-ups)
-FRDM P12 pin 6, GND     -> PCA9685 GND
-FRDM P12 pin 7, I3C_SCL -> PCA9685 SCL (used in I2C-compatible mode)
-FRDM P12 pin 9, I3C_SDA -> PCA9685 SDA (used in I2C-compatible mode)
+FRDM P11 pin 1, 3.3 V     -> PCA9685 VCC (logic and breakout pull-ups)
+FRDM P11 pin 6, GND       -> PCA9685 GND
+FRDM P11 pin 5, LPI2C4_SCL -> PCA9685 SCL
+FRDM P11 pin 3, LPI2C4_SDA -> PCA9685 SDA
+
+FRDM P12 pin 1, 3.3 V   -> GY-530 VIN
+FRDM P12 pin 6, GND     -> GY-530 GND
+FRDM P12 pin 7, I3C_SCL -> GY-530 SCL (I2C-compatible mode)
+FRDM P12 pin 9, I3C_SDA -> GY-530 SDA (I2C-compatible mode)
 
 External regulated 5 V + -> PCA9685 V+ servo terminal
 External regulated 5 V - -> PCA9685 GND (common with FRDM)
@@ -219,7 +224,8 @@ Keep PCA9685 `VCC` at **3.3 V** so breakout-board I2C pull-ups do not pull the F
 
 ## Safe servo bring-up
 
-On the i.MX93, identify the P12 controller instead of guessing a bus number:
+On the i.MX93, configure P11 pins 3/5 for LPI2C4 and identify its Linux bus
+instead of guessing a bus number:
 
 ```sh
 i2cdetect -l
@@ -251,6 +257,64 @@ python3 -m ecosort_hw --live --lid plastic --bus BUS_NUMBER --hardware-config ha
 The fallback defaults use 1000-microsecond closed and 1833-microsecond open commands, but your measured `hardware.json` values take precedence. The selected open lid remains powered during the dwell. A separate timer commands closure even if camera capture stops progressing; exiting the controller also commands closure. This is software scheduling, not an independent hardware watchdog or physical confirmation of lid position.
 
 This prototype still has **no physical E-stop, lid switches, jam detection, or independent watchdog**. Software cannot guarantee closure after a power, wire, or I2C failure. Use lightweight normally-closed lids, mechanical stops, keep hands clear, and never run it unattended.
+
+## Mobile app telemetry API
+
+The live demo can expose accepted classifications and one GY-530/VL53L0X
+depth sensor to the EcoSort Expo app. The HTTP service uses only Python's
+standard library. The sensor adapter uses `adafruit-extended-bus` so it can
+open a selected Linux `/dev/i2c-*` device directly.
+
+Install the board requirements and identify both I2C buses:
+
+```sh
+python3 -m pip install -r requirements-board.txt
+i2cdetect -l
+i2cdetect -y PCA_BUS
+i2cdetect -y DEPTH_BUS
+```
+
+The PCA bus should contain `0x40`; the GY-530 bus should contain `0x29`.
+Start the normal live demo with the additional API options:
+
+```sh
+python3 -m ecosort_ai.live_demo \
+  --model artifacts/vela/waste_classifier_int8_vela.tflite \
+  --labels artifacts/labels.txt \
+  --metadata artifacts/open_set.json \
+  --live --i2c-bus PCA_BUS \
+  --edge-api --edge-port 8080 \
+  --depth-i2c-bus DEPTH_BUS \
+  --depth-bin plastic \
+  --empty-depth-cm 40
+```
+
+Change `--depth-bin` to `metal` or `general` according to where the single
+sensor is mounted. Measure `--empty-depth-cm` from the sensor face to the bin
+floor while the bin is empty.
+
+For a network-only test without the camera or servos:
+
+```sh
+python3 -m ecosort_edge \
+  --depth-i2c-bus DEPTH_BUS \
+  --depth-bin plastic \
+  --empty-depth-cm 40
+```
+
+The API listens on all interfaces at port 8080 and provides:
+
+```text
+GET  /api/status
+GET  /api/bins
+GET  /api/events
+POST /api/bins/{plastic|metal|general}/emptied
+```
+
+Open `http://BOARD_IP:8080/api/status` from another device on the same LAN to
+verify connectivity. Two uninstrumented bins are intentionally reported as
+sensor-offline; the AI classification events for all three categories are
+still published.
 
 ## Compile for the i.MX93 NPU
 
