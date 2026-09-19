@@ -110,6 +110,31 @@ class EdgeApiServer:
                 if (
                     len(parts) == 4
                     and parts[:2] == ["api", "bins"]
+                    and parts[3] == "fill-state"
+                ):
+                    category = parts[2]
+                    if category not in BIN_CATEGORIES:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "unknown bin"})
+                        return
+                    try:
+                        payload = self._read_json()
+                        confidence = payload.get("confidence")
+                        if confidence is not None and not isinstance(confidence, (int, float)):
+                            raise ValueError("confidence must be a number")
+                        bin_state = state.update_fill_state(
+                            category,
+                            str(payload.get("fill_state", "")),
+                            source=str(payload.get("source", "webcam")),
+                            confidence=float(confidence) if confidence is not None else None,
+                        )
+                    except (ValueError, json.JSONDecodeError) as exc:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                        return
+                    self._json(HTTPStatus.OK, {"bin": bin_state})
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["api", "bins"]
                     and parts[3] == "emptied"
                 ):
                     category = parts[2]
@@ -120,6 +145,19 @@ class EdgeApiServer:
                     self._json(HTTPStatus.OK, {"bin": bin_state, "event": event})
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+            def _read_json(self) -> dict[str, Any]:
+                raw_length = self.headers.get("Content-Length", "0")
+                try:
+                    length = int(raw_length)
+                except ValueError as exc:
+                    raise ValueError("invalid Content-Length") from exc
+                if length < 1 or length > 4096:
+                    raise ValueError("JSON body must be between 1 and 4096 bytes")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError("JSON body must be an object")
+                return payload
 
             def log_message(self, _format: str, *_args: object) -> None:
                 return

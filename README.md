@@ -313,7 +313,23 @@ GET  /api/status
 GET  /api/bins
 GET  /api/events
 POST /api/bins/{plastic|metal|general}/emptied
+POST /api/bins/{plastic|metal|general}/fill-state
 ```
+
+The fill-level contract is categorical: `empty`, `half-full`, or `full`.
+To publish stable webcam predictions into the API (and therefore the mobile
+alarm), run the API on the board and the webcam model on any machine on the
+same network:
+
+```sh
+python fill_level_ai/webcam.py \
+  --camera 0 \
+  --edge-api-url http://BOARD_IP:8080 \
+  --bin plastic
+```
+
+The webcam waits for three matching predictions before publishing a changed
+state. A `full` state is then returned by `GET /api/bins` for the phone.
 
 Open `http://BOARD_IP:8080/api/status` from another device on the same LAN to
 verify connectivity. Two uninstrumented bins are intentionally reported as

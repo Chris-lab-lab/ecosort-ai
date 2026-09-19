@@ -32,7 +32,7 @@ class EdgeApiTests(unittest.TestCase):
 
         bins = self.get_json("/api/bins")["bins"]
         plastic = next(item for item in bins if item["id"] == "plastic")
-        self.assertEqual(plastic["fill_percent"], 73)
+        self.assertEqual(plastic["fill_state"], "half-full")
 
         events = self.get_json("/api/events")["events"]
         self.assertEqual(events[0]["object"], "PET Bottle")
@@ -45,8 +45,22 @@ class EdgeApiTests(unittest.TestCase):
         )
         with urlopen(request, timeout=2) as response:
             payload = json.load(response)
-        self.assertEqual(payload["bin"]["fill_percent"], 0)
+        self.assertEqual(payload["bin"]["fill_state"], "empty")
         self.assertEqual(payload["event"]["kind"], "maintenance")
+
+    def test_webcam_fill_state_endpoint(self) -> None:
+        request = Request(
+            f"{self.base_url}/api/bins/plastic/fill-state",
+            data=json.dumps(
+                {"fill_state": "full", "source": "webcam", "confidence": 0.96}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=2) as response:
+            payload = json.load(response)
+        self.assertEqual(payload["bin"]["fill_state"], "full")
+        self.assertEqual(payload["bin"]["fill_source"], "webcam")
 
     def test_unknown_path_is_404(self) -> None:
         with self.assertRaises(HTTPError) as caught:

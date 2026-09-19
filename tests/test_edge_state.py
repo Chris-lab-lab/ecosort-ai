@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 
 from ecosort_edge.monitor import DepthSensorMonitor
-from ecosort_edge.state import EdgeStateStore, calculate_fill_percentage
+from ecosort_edge.state import (
+    EdgeStateStore,
+    calculate_fill_percentage,
+    fill_state_for_percentage,
+)
 
 
 class FakeDistanceSensor:
@@ -26,6 +30,9 @@ class EdgeStateTests(unittest.TestCase):
         self.assertEqual(calculate_fill_percentage(30, 7.5), 75)
         self.assertEqual(calculate_fill_percentage(30, 40), 0)
         self.assertEqual(calculate_fill_percentage(30, 0), 100)
+        self.assertEqual(fill_state_for_percentage(0), "empty")
+        self.assertEqual(fill_state_for_percentage(63), "half-full")
+        self.assertEqual(fill_state_for_percentage(75), "full")
 
     def test_depth_monitor_filters_readings_and_updates_selected_bin(self) -> None:
         state = EdgeStateStore(monitored_bin="general", empty_depth_cm=30)
@@ -37,9 +44,19 @@ class EdgeStateTests(unittest.TestCase):
 
         bins = {item["id"]: item for item in state.bins_payload()["bins"]}
         self.assertEqual(bins["general"]["distance_cm"], 11.0)
-        self.assertEqual(bins["general"]["fill_percent"], 63)
+        self.assertEqual(bins["general"]["fill_state"], "half-full")
         self.assertTrue(bins["general"]["sensor_online"])
         self.assertFalse(bins["plastic"]["sensor_online"])
+
+    def test_webcam_fill_state_updates_selected_bin(self) -> None:
+        state = EdgeStateStore()
+        updated = state.update_fill_state(
+            "plastic", "full", source="webcam", confidence=0.93
+        )
+        self.assertEqual(updated["fill_state"], "full")
+        self.assertEqual(updated["fill_source"], "webcam")
+        self.assertEqual(updated["fill_confidence"], 0.93)
+        self.assertTrue(updated["fill_online"])
 
     def test_repeated_sensor_failures_mark_it_offline(self) -> None:
         state = EdgeStateStore()

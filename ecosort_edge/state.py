@@ -11,6 +11,7 @@ from uuid import uuid4
 
 
 BIN_CATEGORIES = ("plastic", "metal", "general")
+FILL_STATES = ("empty", "half-full", "full")
 ROUTE_TO_CATEGORY = {
     "plastic": "plastic",
     "metal": "metal",
@@ -32,6 +33,17 @@ def calculate_fill_percentage(empty_depth_cm: float, distance_cm: float) -> int:
         raise ValueError("distance must be a non-negative finite number")
     raw = ((empty_depth_cm - distance_cm) / empty_depth_cm) * 100.0
     return round(min(100.0, max(0.0, raw)))
+
+
+def fill_state_for_percentage(fill_percentage: float) -> str:
+    """Normalize continuous sensor data to the app's three-state contract."""
+    if not math.isfinite(fill_percentage):
+        raise ValueError("fill percentage must be finite")
+    if fill_percentage >= 75:
+        return "full"
+    if fill_percentage <= 5:
+        return "empty"
+    return "half-full"
 
 
 class EdgeStateStore:
@@ -61,7 +73,10 @@ class EdgeStateStore:
                 "id": category,
                 "distance_cm": round(empty_depth_cm, 1),
                 "empty_depth_cm": round(empty_depth_cm, 1),
-                "fill_percent": 0,
+                "fill_state": "empty",
+                "fill_source": None,
+                "fill_confidence": None,
+                "fill_online": False,
                 "sensor_online": False,
                 "last_updated": timestamp,
                 "last_emptied": timestamp,
@@ -82,12 +97,16 @@ class EdgeStateStore:
         distance_cm = distance_mm / 10.0
         with self._lock:
             bin_state = self._bins[self.monitored_bin]
+            fill_percentage = calculate_fill_percentage(
+                float(bin_state["empty_depth_cm"]), distance_cm
+            )
             bin_state.update(
                 {
                     "distance_cm": round(distance_cm, 1),
-                    "fill_percent": calculate_fill_percentage(
-                        float(bin_state["empty_depth_cm"]), distance_cm
-                    ),
+                    "fill_state": fill_state_for_percentage(fill_percentage),
+                    "fill_source": "depth_sensor",
+                    "fill_confidence": None,
+                    "fill_online": True,
                     "sensor_online": True,
                     "last_updated": timestamp or utc_now(),
                 }
@@ -99,8 +118,47 @@ class EdgeStateStore:
         with self._lock:
             bin_state = self._bins[self.monitored_bin]
             bin_state["sensor_online"] = False
+            if bin_state["fill_source"] == "depth_sensor":
+                bin_state["fill_online"] = False
             bin_state["last_updated"] = utc_now()
             self._sensor_error = reason.strip() or "depth sensor unavailable"
+            return dict(bin_state)
+
+    def update_fill_state(
+        self,
+        category: str,
+        fill_state: str,
+        *,
+        source: str = "webcam",
+        confidence: float | None = None,
+        timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        if category not in BIN_CATEGORIES:
+            raise ValueError(f"unknown bin category: {category}")
+        normalized = fill_state.strip().lower()
+        if normalized not in FILL_STATES:
+            raise ValueError(f"unknown fill state: {fill_state}")
+        normalized_source = source.strip().lower()
+        if not normalized_source or len(normalized_source) > 40:
+            raise ValueError("source must be between 1 and 40 characters")
+        if confidence is not None and (
+            not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0
+        ):
+            raise ValueError("confidence must be between 0 and 1")
+
+        with self._lock:
+            bin_state = self._bins[category]
+            bin_state.update(
+                {
+                    "fill_state": normalized,
+                    "fill_source": normalized_source,
+                    "fill_confidence": (
+                        round(confidence, 6) if confidence is not None else None
+                    ),
+                    "fill_online": True,
+                    "last_updated": timestamp or utc_now(),
+                }
+            )
             return dict(bin_state)
 
     def record_disposal(
@@ -140,7 +198,10 @@ class EdgeStateStore:
             bin_state.update(
                 {
                     "distance_cm": float(bin_state["empty_depth_cm"]),
-                    "fill_percent": 0,
+                    "fill_state": "empty",
+                    "fill_source": "manual",
+                    "fill_confidence": None,
+                    "fill_online": True,
                     "last_updated": timestamp,
                     "last_emptied": timestamp,
                 }
