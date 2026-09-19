@@ -268,7 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="plastic",
         help="physical bin monitored by the single depth sensor",
     )
-    parser.add_argument("--empty-depth-cm", type=float, default=40.0)
+    parser.add_argument("--empty-depth-cm", type=float, default=30.0)
     parser.add_argument("--depth-poll-seconds", type=float, default=1.0)
     parser.add_argument(
         "--metal-sensor-path",

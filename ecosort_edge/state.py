@@ -41,7 +41,7 @@ class EdgeStateStore:
         self,
         *,
         monitored_bin: str = "plastic",
-        empty_depth_cm: float = 40.0,
+        empty_depth_cm: float = 30.0,
         max_events: int = 100,
     ) -> None:
         if monitored_bin not in BIN_CATEGORIES:

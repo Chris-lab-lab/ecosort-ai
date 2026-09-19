@@ -23,12 +23,12 @@ class FakeDistanceSensor:
 
 class EdgeStateTests(unittest.TestCase):
     def test_fill_calculation_clamps(self) -> None:
-        self.assertEqual(calculate_fill_percentage(40, 10), 75)
-        self.assertEqual(calculate_fill_percentage(40, 50), 0)
-        self.assertEqual(calculate_fill_percentage(40, 0), 100)
+        self.assertEqual(calculate_fill_percentage(30, 7.5), 75)
+        self.assertEqual(calculate_fill_percentage(30, 40), 0)
+        self.assertEqual(calculate_fill_percentage(30, 0), 100)
 
     def test_depth_monitor_filters_readings_and_updates_selected_bin(self) -> None:
-        state = EdgeStateStore(monitored_bin="general", empty_depth_cm=40)
+        state = EdgeStateStore(monitored_bin="general", empty_depth_cm=30)
         sensor = FakeDistanceSensor([100, 120, 110])
         monitor = DepthSensorMonitor(sensor, state, median_samples=3)
         self.assertTrue(monitor.sample_once())
@@ -37,7 +37,7 @@ class EdgeStateTests(unittest.TestCase):
 
         bins = {item["id"]: item for item in state.bins_payload()["bins"]}
         self.assertEqual(bins["general"]["distance_cm"], 11.0)
-        self.assertEqual(bins["general"]["fill_percent"], 72)
+        self.assertEqual(bins["general"]["fill_percent"], 63)
         self.assertTrue(bins["general"]["sensor_online"])
         self.assertFalse(bins["plastic"]["sensor_online"])
 

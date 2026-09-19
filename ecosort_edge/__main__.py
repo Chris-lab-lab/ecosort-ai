@@ -19,7 +19,7 @@ def main() -> int:
     parser.add_argument("--depth-i2c-bus", type=int)
     parser.add_argument("--depth-i2c-address", type=lambda value: int(value, 0), default=0x29)
     parser.add_argument("--depth-bin", choices=BIN_CATEGORIES, default="plastic")
-    parser.add_argument("--empty-depth-cm", type=float, default=40.0)
+    parser.add_argument("--empty-depth-cm", type=float, default=30.0)
     parser.add_argument("--depth-poll-seconds", type=float, default=1.0)
     args = parser.parse_args()
 

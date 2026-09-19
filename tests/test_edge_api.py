@@ -11,7 +11,7 @@ from ecosort_edge.state import EdgeStateStore
 
 class EdgeApiTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.state = EdgeStateStore(monitored_bin="plastic", empty_depth_cm=40)
+        self.state = EdgeStateStore(monitored_bin="plastic", empty_depth_cm=30)
         self.state.update_distance_mm(80)
         self.state.record_disposal(route="plastic", confidence=0.94, detected_object="PET Bottle")
         self.server = EdgeApiServer(self.state, host="127.0.0.1", port=0).start()
@@ -32,7 +32,7 @@ class EdgeApiTests(unittest.TestCase):
 
         bins = self.get_json("/api/bins")["bins"]
         plastic = next(item for item in bins if item["id"] == "plastic")
-        self.assertEqual(plastic["fill_percent"], 80)
+        self.assertEqual(plastic["fill_percent"], 73)
 
         events = self.get_json("/api/events")["events"]
         self.assertEqual(events[0]["object"], "PET Bottle")

@@ -286,7 +286,7 @@ python3 -m ecosort_ai.live_demo \
   --edge-api --edge-port 8080 \
   --depth-i2c-bus DEPTH_BUS \
   --depth-bin plastic \
-  --empty-depth-cm 40
+  --empty-depth-cm 30
 ```
 
 Change `--depth-bin` to `metal` or `general` according to where the single
@@ -299,7 +299,7 @@ For a network-only test without the camera or servos:
 python3 -m ecosort_edge \
   --depth-i2c-bus DEPTH_BUS \
   --depth-bin plastic \
-  --empty-depth-cm 40
+  --empty-depth-cm 30
 ```
 
 The API listens on all interfaces at port 8080 and provides:
