@@ -14,7 +14,12 @@ from .lids import (
     load_lid_config,
 )
 from .pca9685 import LinuxI2CBus, PCA9685, PCA9685Config, RegisterBus
-from .sensors import DigitalInputSensor, DigitalMetalSensor, NumericSensor
+from .sensors import (
+    DigitalInputSensor,
+    DigitalMetalSensor,
+    NumericSensor,
+    VL53L0XDistanceSensor,
+)
 
 __all__ = [
     "DEFAULT_LIDS",
@@ -30,4 +35,5 @@ __all__ = [
     "PCA9685Config",
     "RegisterBus",
     "ServoConfig",
+    "VL53L0XDistanceSensor",
 ]

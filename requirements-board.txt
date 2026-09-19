@@ -1,5 +1,7 @@
 # Prefer the TensorFlow Lite and OpenCV packages already supplied by the NXP BSP.
 numpy>=1.24
 Pillow>=10
+adafruit-circuitpython-vl53l0x
+adafruit-extended-bus
 # tflite-runtime and OpenCV package names depend on the selected NXP image.
 
